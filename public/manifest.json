@@ -1,0 +1,17 @@
+{
+  "name": "CHIA VÉ TỰ ĐỘNG 4.0",
+  "short_name": "Chia Vé 4.0",
+  "description": "Hệ thống tự động phân phối vé số theo bộ.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#4f46e5",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/2545/2545811.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
