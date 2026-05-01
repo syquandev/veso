@@ -1122,7 +1122,7 @@ export default function App() {
                           onClick={() => {
                             if (!searchNumber) return;
                             const num = searchNumber.length === 1 ? '0' + searchNumber : searchNumber;
-                            adjustInventory(num, -1, editingStation);
+                            adjustInventory(num, -adjustAmount, editingStation);
                           }}
                           disabled={!searchNumber}
                           className="w-10 h-full flex items-center justify-center text-indigo-400 hover:bg-white/5 rounded-lg transition-colors font-bold text-xl disabled:opacity-30"
@@ -1139,7 +1139,7 @@ export default function App() {
                           onClick={() => {
                             if (!searchNumber) return;
                             const num = searchNumber.length === 1 ? '0' + searchNumber : searchNumber;
-                            adjustInventory(num, 1, editingStation);
+                            adjustInventory(num, adjustAmount, editingStation);
                           }}
                           disabled={!searchNumber}
                           className="w-10 h-full flex items-center justify-center text-indigo-400 hover:bg-white/5 rounded-lg transition-colors font-bold text-xl disabled:opacity-30"

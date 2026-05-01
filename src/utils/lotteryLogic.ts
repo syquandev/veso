@@ -35,17 +35,27 @@ export function isForbidden(numbers: string[], setId?: string): boolean {
 export function violatesDistributionRules(num: string, existing: string[], targetTotal: number): boolean {
   const decade = getDecade(num);
   const ending = num.slice(-1);
-  
-  // Rule: Max occurrences per ending (Max 2)
-  // User: "không thể trùng đuôi nhiều hơn 2 lần"
-  const maxEnding = Math.max(2, Math.ceil(targetTotal / 10));
-  const endingCount = existing.filter(n => n.slice(-1) === ending).length;
-  if (endingCount >= maxEnding) return true;
 
-  // Rule: Balanced Decades (No duplicate decades if possible, or balanced)
-  const maxDecade = Math.ceil(targetTotal / 10);
+  // Rule: No duplicate tens (hàng) - strict for all sellers
+  // "không được trùng hàng"
+  const maxDecade = Math.max(1, Math.ceil(targetTotal / 10));
   const decadeCount = existing.filter(n => getDecade(n) === decade).length;
   if (decadeCount >= maxDecade) return true;
+
+  // Rule: No duplicate endings (đuôi) - strict for small sellers
+  // Large sellers can have dup endings but NOT dup tens
+  // "Có thể trùng đuôi nhưng ko trùng hàng"
+  const isLargeSeller = targetTotal > 15;
+  if (!isLargeSeller) {
+    // Small sellers: no duplicate endings at all
+    const endingCount = existing.filter(n => n.slice(-1) === ending).length;
+    if (endingCount >= 2) return true;
+  } else {
+    // Large sellers: allow more ending duplicates but still limit
+    const maxEnding = Math.max(2, Math.ceil(targetTotal / 10));
+    const endingCount = existing.filter(n => n.slice(-1) === ending).length;
+    if (endingCount >= maxEnding) return true;
+  }
 
   return false;
 }
@@ -72,7 +82,7 @@ export function distributeTickets(
     if (doubleSets[id]) return doubleSets[id];
     return Object.keys(doubleSets).find(key => doubleSets[key] === id);
   };
-  
+
   // Clone pools to manage inventory
   const currentMainPool = { ...mainStationPool };
   const currentSubPools: Record<string, Record<string, number>> = {};
@@ -84,15 +94,47 @@ export function distributeTickets(
   const day = new Date(date).getDate();
   const baseSetIndex = (day - 1) % lotterySets.length;
 
-  sellers.filter(s => s.isEnabled).forEach((seller, sIdx) => {
-    // Get seller history for "not in last 2 days" rule
+  const enabledSellers = sellers
+    .map((s, index) => ({ seller: s, originalIndex: index }))
+    .filter(item => item.seller.isEnabled)
+    .sort((a, b) => b.seller.targetTotalTickets - a.seller.targetTotalTickets);
+
+  enabledSellers.forEach(({ seller, originalIndex }) => {
+    const sIdx = originalIndex;
+
+    // Get seller history for "not in last 2-3 days" rule
     const sellerHistory = history
-      .slice(0, 2)
+      .slice(0, 3) // Check last 3 days
       .flatMap(dayResults => dayResults.filter(r => r.sellerId === seller.id))
       .flatMap(r => [
-        ...r.mainStationNumbers, 
+        ...r.mainStationNumbers,
         ...r.subStationResults.flatMap(sr => sr.numbers)
       ]);
+
+    // Rule: Special numbers max 2 times per week
+    const weeklyHistory = history
+      .slice(0, 7) // Check last 7 days
+      .flatMap(dayResults => dayResults.filter(r => r.sellerId === seller.id))
+      .flatMap(r => [
+        ...r.mainStationNumbers,
+        ...r.subStationResults.flatMap(sr => sr.numbers)
+      ]);
+
+    const specialNumbersCounts: Record<string, number> = {};
+    ['00', '04', '05', '45', '85'].forEach(num => {
+      specialNumbersCounts[num] = weeklyHistory.filter(n => n === num).length;
+    });
+
+    const isNumberForbidden = (nums: string[], setId?: string) => {
+      if (isForbidden(nums, setId)) return true;
+      const lastNum = nums[nums.length - 1];
+      if (['00', '04', '05', '45', '85'].includes(lastNum)) {
+        // Count how many times it appeared this week + current assignment
+        const currentCount = nums.filter(n => n === lastNum).length - 1; // -1 because it's in nums
+        if ((specialNumbersCounts[lastNum] || 0) + currentCount >= 2) return true;
+      }
+      return false;
+    };
 
     // Determine starting set
     let startSetIndex = baseSetIndex;
@@ -115,7 +157,7 @@ export function distributeTickets(
     let mainNumbers: string[] = [];
     let mainStationQuantities: Record<string, number> = {};
     let subStationResults: { id: string, name: string, numbers: string[], quantities: Record<string, number> }[] = [];
-    
+
     // Initialize subStationResults with correct names
     subStations.forEach(s => {
       subStationResults.push({ id: s.id, name: s.name, numbers: [], quantities: {} });
@@ -133,7 +175,7 @@ export function distributeTickets(
         const num = pref.number;
         const qty = pref.quantity;
         const stationId = pref.stationId;
-        
+
         if (stationId === 'main') {
           if (currentMainPool[num] >= qty) {
             mainNumbers.push(num);
@@ -141,11 +183,11 @@ export function distributeTickets(
             currentMainPool[num] -= qty;
             currentTargetTotal -= qty;
           } else {
-            shortages.push({ 
-              sellerId: seller.id, 
-              sellerName: seller.name, 
-              station: 'main', 
-              needed: qty, 
+            shortages.push({
+              sellerId: seller.id,
+              sellerName: seller.name,
+              station: 'main',
+              needed: qty,
               available: currentMainPool[num] || 0,
               missingNumber: num
             });
@@ -160,11 +202,11 @@ export function distributeTickets(
               currentTargetTotal -= qty;
             }
           } else {
-            shortages.push({ 
-              sellerId: seller.id, 
-              sellerName: seller.name, 
-              station: stationId, 
-              needed: qty, 
+            shortages.push({
+              sellerId: seller.id,
+              sellerName: seller.name,
+              station: stationId,
+              needed: qty,
               available: currentSubPools[stationId][num] || 0,
               missingNumber: num
             });
@@ -192,11 +234,11 @@ export function distributeTickets(
               }
             }
             if (!foundInSub) {
-              shortages.push({ 
-                sellerId: seller.id, 
-                sellerName: seller.name, 
-                station: 'ưu tiên', 
-                needed: qty, 
+              shortages.push({
+                sellerId: seller.id,
+                sellerName: seller.name,
+                station: 'ưu tiên',
+                needed: qty,
                 available: 0,
                 missingNumber: num
               });
@@ -211,7 +253,7 @@ export function distributeTickets(
     let targetSubCounts: Record<string, number> = {};
 
     const remainingNumbersNeeded = Math.max(0, Math.ceil(currentTargetTotal / sheetsPerNumber));
-    
+
     if (seller.allocationMode === 'manual') {
       targetMainCount = Math.ceil((currentTargetTotal || 0) / sheetsPerNumber);
       Object.entries(seller.subStationRatios).forEach(([id, qty]) => {
@@ -220,11 +262,11 @@ export function distributeTickets(
     } else {
       const mainRatio = seller.customRatio !== undefined ? seller.customRatio / 100 : 0.7;
       targetMainCount = seller.mainEnabled ? Math.round(remainingNumbersNeeded * mainRatio) : 0;
-      
+
       const totalSubNeeded = remainingNumbersNeeded - targetMainCount;
       const subStationIds = Object.keys(seller.subStationRatios);
       const totalSubRatio = Object.values(seller.subStationRatios).reduce((a, b) => a + b, 0);
-      
+
       if (totalSubRatio > 0) {
         let allocatedSub = 0;
         subStationIds.forEach((id, idx) => {
@@ -250,7 +292,7 @@ export function distributeTickets(
 
     // Collect from sets while maintaining structure
     const startSet = lotterySets[startSetIndex];
-    
+
     while (initialNumbersFromSets.length < totalNeededFromSets) {
       const setIdx = (startSetIndex + currentSetOffset) % lotterySets.length;
       const set = lotterySets[setIdx];
@@ -265,25 +307,25 @@ export function distributeTickets(
         if (s) {
           s.numbers.forEach(num => {
             if (initialNumbersFromSets.length < totalNeededFromSets && !initialNumbersFromSets.includes(num) && !mainNumbers.includes(num) && !subStationResults.some(r => r.numbers.includes(num))) {
-              
+
               const isSmallSeller = seller.targetTotalTickets <= 160;
               const allCurrent = [...initialNumbersFromSets, ...mainNumbers, ...subStationResults.flatMap(r => r.numbers)];
-              
+
               // Check for forbidden, history, or distribution rule violations
-              const shouldReplace = sellerHistory.includes(num) || 
-                                  isForbidden([...allCurrent, num], startSet.id) ||
-                                  violatesDistributionRules(num, allCurrent, totalNeededFromSets);
+              const shouldReplace = sellerHistory.includes(num) ||
+                isForbidden([...allCurrent, num], startSet.id) ||
+                violatesDistributionRules(num, allCurrent, totalNeededFromSets);
 
               if (shouldReplace) {
-                const availableMain = Object.keys(currentMainPool).filter(n => currentMainPool[n] > 0);
+                const availableMain = Object.keys(currentMainPool).filter(n => currentMainPool[n] >= sheetsPerNumber);
                 const replacement = findReplacement(
-                  num, 
-                  availableMain, 
-                  allCurrent, 
-                  neutralNumbers, 
-                  sellerHistory, 
-                  startSet.id, 
-                  true, 
+                  num,
+                  availableMain,
+                  allCurrent,
+                  neutralNumbers,
+                  sellerHistory,
+                  startSet.id,
+                  true,
                   isSmallSeller,
                   totalNeededFromSets
                 );
@@ -296,13 +338,13 @@ export function distributeTickets(
           });
         }
       });
-currentSetOffset++;
-if (currentSetOffset > lotterySets.length * 2) break;
-}
+      currentSetOffset++;
+      if (currentSetOffset > lotterySets.length * 2) break;
+    }
 
     // 3. Apply Decade Distribution Rules based on total count
     const totalAssignedCount = initialNumbersFromSets.length + mainNumbers.length + subStationResults.reduce((acc, r) => acc + r.numbers.length, 0);
-    
+
     // Helper to add specific decades if missing
     const ensureDecades = (count0x: number, count9x: number) => {
       const current0x = [...initialNumbersFromSets, ...mainNumbers, ...subStationResults.flatMap(r => r.numbers)].filter(n => getDecade(n) === 0).length;
@@ -316,7 +358,7 @@ if (currentSetOffset > lotterySets.length * 2) break;
         if (replaceableIdx === -1) break;
 
         if (needed0x > 0) {
-          const available0x = Object.keys(currentMainPool).filter(n => currentMainPool[n] > 0 && getDecade(n) === 0 && !initialNumbersFromSets.includes(n));
+          const available0x = Object.keys(currentMainPool).filter(n => currentMainPool[n] >= sheetsPerNumber && getDecade(n) === 0 && !initialNumbersFromSets.includes(n));
           if (available0x.length > 0) {
             initialNumbersFromSets[replaceableIdx] = available0x[0];
             needed0x--;
@@ -324,7 +366,7 @@ if (currentSetOffset > lotterySets.length * 2) break;
           }
         }
         if (needed9x > 0) {
-          const available9x = Object.keys(currentMainPool).filter(n => currentMainPool[n] > 0 && getDecade(n) === 9 && !initialNumbersFromSets.includes(n));
+          const available9x = Object.keys(currentMainPool).filter(n => currentMainPool[n] >= sheetsPerNumber && getDecade(n) === 9 && !initialNumbersFromSets.includes(n));
           if (available9x.length > 0) {
             initialNumbersFromSets[replaceableIdx] = available9x[0];
             needed9x--;
@@ -346,7 +388,7 @@ if (currentSetOffset > lotterySets.length * 2) break;
       const setsCount = Math.floor(totalAssignedCount / 10);
       ensureDecades(setsCount, setsCount); // e.g. 30 numbers -> 3 of each
     }
-    
+
     // Ensure all decades for 15+ numbers
     if (totalAssignedCount >= 15) {
       const presentDecades = new Set([...initialNumbersFromSets, ...mainNumbers, ...subStationResults.flatMap(r => r.numbers)].map(getDecade));
@@ -357,7 +399,7 @@ if (currentSetOffset > lotterySets.length * 2) break;
             const decadeCount = initialNumbersFromSets.filter(num => getDecade(num) === decade).length;
             return decadeCount > 1;
           });
-          const availableMain = Object.keys(currentMainPool).filter(n => currentMainPool[n] > 0 && getDecade(n) === d);
+          const availableMain = Object.keys(currentMainPool).filter(n => currentMainPool[n] >= sheetsPerNumber && getDecade(n) === d);
           if (replaceableIdx !== -1 && availableMain.length > 0) {
             initialNumbersFromSets[replaceableIdx] = availableMain[0];
             presentDecades.add(d);
@@ -369,7 +411,7 @@ if (currentSetOffset > lotterySets.length * 2) break;
     // 4. Specific Set Logic (02-03, 08-09)
     if (['02', '03'].includes(startSet.id)) {
       // Prioritize adding 85 or 45
-      const badNums = ['85', '45'].filter(n => currentMainPool[n] > 0 && !initialNumbersFromSets.includes(n));
+      const badNums = ['85', '45'].filter(n => currentMainPool[n] >= sheetsPerNumber && !initialNumbersFromSets.includes(n));
       if (badNums.length > 0) {
         const replaceableIdx = initialNumbersFromSets.findIndex(n => !UGLY_NUMBERS.includes(n) && !BEAUTIFUL_NUMBERS.includes(n));
         if (replaceableIdx !== -1) initialNumbersFromSets[replaceableIdx] = badNums[0];
@@ -377,7 +419,7 @@ if (currentSetOffset > lotterySets.length * 2) break;
     }
     if (['08', '09'].includes(startSet.id)) {
       // Prioritize adding 04 or 05
-      const badNums = ['04', '05'].filter(n => currentMainPool[n] > 0 && !initialNumbersFromSets.includes(n));
+      const badNums = ['04', '05'].filter(n => currentMainPool[n] >= sheetsPerNumber && !initialNumbersFromSets.includes(n));
       if (badNums.length > 0) {
         const replaceableIdx = initialNumbersFromSets.findIndex(n => !UGLY_NUMBERS.includes(n) && !BEAUTIFUL_NUMBERS.includes(n));
         if (replaceableIdx !== -1) initialNumbersFromSets[replaceableIdx] = badNums[0];
@@ -385,19 +427,34 @@ if (currentSetOffset > lotterySets.length * 2) break;
     }
 
     // 5. Distribute initialNumbersFromSets to Main and Sub stations
-    const isReplaceable = (n: string) => {
+    // Rule: Cannot withdraw from main: beautiful numbers, 0x, x0, x8 ending, x9 ending, 99
+    const canWithdrawFromMain = (n: string) => {
       const val = parseInt(n);
-      return neutralNumbers.includes(n) && val >= 10 && val < 90;
+      const decade = getDecade(n);
+      const ending = n.slice(-1);
+      // Cannot withdraw beautiful numbers
+      if (BEAUTIFUL_NUMBERS.includes(n)) return false;
+      // Cannot withdraw 0x numbers
+      if (decade === 0) return false;
+      // Cannot withdraw x0 numbers
+      if (ending === '0') return false;
+      // Cannot withdraw x8 or x9 endings
+      if (ending === '8' || ending === '9') return false;
+      // Cannot withdraw 99
+      if (n === '99') return false;
+      // 9x can be withdrawn but sparingly - allow but deprioritize
+      return true;
     };
 
+    // Determine which indices to send to sub stations
     const replaceableIndices: number[] = [];
     initialNumbersFromSets.forEach((n, i) => {
-      if (isReplaceable(n)) replaceableIndices.push(i);
+      if (canWithdrawFromMain(n)) replaceableIndices.push(i);
     });
 
     let indicesToReplace: Record<number, string> = {};
     const availableToReplace = [...replaceableIndices];
-    
+
     Object.entries(targetSubCounts).forEach(([subId, count]) => {
       let allocated = 0;
       while (allocated < count && availableToReplace.length > 0) {
@@ -408,69 +465,86 @@ if (currentSetOffset > lotterySets.length * 2) break;
       }
     });
 
+    // Helper: find sub replacement with proper priority
+    // Priority: same number > same tens digit (skip ±1,±2 from history) > nearby
+    const findSubReplacement = (
+      targetNum: string,
+      availableSub: string[],
+      allAssigned: string[],
+      recentHistory: string[]
+    ): string | null => {
+      const targetDecade = getDecade(targetNum);
+      const targetVal = parseInt(targetNum);
+
+      // Filter out already assigned and forbidden
+      const safe = availableSub.filter(n =>
+        !allAssigned.includes(n) &&
+        !isNumberForbidden([...allAssigned, n], startSet.id)
+      );
+      if (safe.length === 0) return null;
+
+      // Priority 1: Exact same number
+      if (safe.includes(targetNum)) return targetNum;
+
+      // Priority 2: Same tens digit, but skip numbers ±1 and ±2 from target
+      // e.g. 21 -> can use 23-29, NOT 20 or 22
+      const sameDecade = safe.filter(n => {
+        const d = getDecade(n);
+        const v = parseInt(n);
+        const diff = Math.abs(v - targetVal);
+        // Same decade, skip ±1 and ±2 (too close / just sold)
+        return d === targetDecade && diff >= 3;
+      });
+      // Also check not in recent history
+      const sameDecadeNoHistory = sameDecade.filter(n => !recentHistory.includes(n));
+      if (sameDecadeNoHistory.length > 0) return sameDecadeNoHistory[0];
+      if (sameDecade.length > 0) return sameDecade[0];
+
+      // Priority 3: Any safe number, prefer not in history
+      const noHistory = safe.filter(n => !recentHistory.includes(n));
+      if (noHistory.length > 0) return noHistory[0];
+      return safe[0];
+    };
+
     initialNumbersFromSets.forEach((num, idx) => {
       const subId = indicesToReplace[idx];
       if (subId) {
         const subPool = currentSubPools[subId] || {};
         const subResult = subStationResults.find(r => r.id === subId)!;
-        const availableSub = Object.keys(subPool).filter(n => subPool[n] > 0);
-        const isSmallSeller = seller.targetTotalTickets <= 160;
-        
-        let replacement: string | null = null;
-        // Priority: Exact same number in Sub pool
+        const availableSub = Object.keys(subPool).filter(n => subPool[n] >= sheetsPerNumber);
+
         const currentAssigned = [...mainNumbers, ...subStationResults.flatMap(r => r.numbers)];
-        if (availableSub.includes(num) && !isForbidden([...currentAssigned, num], startSet.id)) {
-          replacement = num;
-        } else {
-          // If not available, find replacement in same decade to maintain structure
-          // CRITICAL: Avoid duplicates across ALL stations and future numbers in the set
-          const futureNumbers = initialNumbersFromSets.slice(idx + 1);
-          const allCurrent = [...currentAssigned, ...futureNumbers];
-          
-          replacement = findReplacement(
-            num, 
-            availableSub, 
-            allCurrent, 
-            neutralNumbers, 
-            sellerHistory, 
-            startSet.id, 
-            true, 
-            isSmallSeller,
-            totalNeededFromSets
-          );
-        }
+
+        // Use proper replacement priority
+        const replacement = findSubReplacement(num, availableSub, currentAssigned, sellerHistory);
 
         if (replacement) {
           subResult.numbers.push(replacement);
           subResult.quantities[replacement] = sheetsPerNumber;
-          subPool[replacement]--;
+          subPool[replacement] -= sheetsPerNumber;
+          // Return withdrawn main number back to pool
+          // (the number was "removed" from main set, goes back to kho)
         } else {
-          // Fallback to Main if Sub is empty
+          // Fallback: keep it in Main if sub has nothing
           const futureNumbers = initialNumbersFromSets.slice(idx + 1);
           const allCurrent = [...mainNumbers, ...subStationResults.flatMap(r => r.numbers), ...futureNumbers];
-          
-          if (currentMainPool[num] > 0 && !allCurrent.includes(num)) {
+
+          if (currentMainPool[num] >= sheetsPerNumber && !allCurrent.includes(num)) {
             mainNumbers.push(num);
             mainStationQuantities[num] = sheetsPerNumber;
-            currentMainPool[num]--;
+            currentMainPool[num] -= sheetsPerNumber;
           } else {
-            const availableMain = Object.keys(currentMainPool).filter(n => currentMainPool[n] > 0);
+            const availableMain = Object.keys(currentMainPool).filter(n => currentMainPool[n] >= sheetsPerNumber);
+            const isSmallSeller = seller.targetTotalTickets <= 160;
             const fallbackReplacement = findReplacement(
-              num,
-              availableMain,
-              allCurrent,
-              neutralNumbers,
-              sellerHistory,
-              startSet.id,
-              true,
-              isSmallSeller,
-              totalNeededFromSets
+              num, availableMain, allCurrent, neutralNumbers, sellerHistory,
+              startSet.id, true, isSmallSeller, totalNeededFromSets
             );
-            
+
             if (fallbackReplacement) {
               mainNumbers.push(fallbackReplacement);
               mainStationQuantities[fallbackReplacement] = sheetsPerNumber;
-              currentMainPool[fallbackReplacement]--;
+              currentMainPool[fallbackReplacement] -= sheetsPerNumber;
             } else {
               shortages.push({ sellerId: seller.id, sellerName: seller.name, station: subId, needed: 1, available: 0 });
             }
@@ -480,38 +554,29 @@ if (currentSetOffset > lotterySets.length * 2) break;
         // Main Station
         let finalNum = num;
         const isSmallSeller = seller.targetTotalTickets <= 160;
-        
-        // Rule: Ở BỘ 00 CHỈ CÓ KHÔNG ĐƯỢC RÚT CON 67, 48
+
         const isSet00Restricted = startSet.id === '00' && (finalNum === '67' || finalNum === '48');
-        
+
         const futureNumbers = initialNumbersFromSets.slice(idx + 1);
         const allCurrent = [...mainNumbers, ...subStationResults.flatMap(r => r.numbers), ...futureNumbers];
 
-        if (currentMainPool[finalNum] > 0 && !isSet00Restricted && !allCurrent.includes(finalNum)) {
+        if (currentMainPool[finalNum] >= sheetsPerNumber && !isSet00Restricted && !allCurrent.includes(finalNum)) {
           mainNumbers.push(finalNum);
           mainStationQuantities[finalNum] = sheetsPerNumber;
-          currentMainPool[finalNum]--;
+          currentMainPool[finalNum] -= sheetsPerNumber;
         } else {
           const availableMain = Object.keys(currentMainPool).filter(n => {
             const isRestricted = startSet.id === '00' && (n === '67' || n === '48');
-            return currentMainPool[n] > 0 && !isRestricted;
+            return currentMainPool[n] >= sheetsPerNumber && !isRestricted;
           });
-          // Maintain decade structure even in Main replacement
           const replacement = findReplacement(
-            finalNum, 
-            availableMain, 
-            allCurrent, 
-            neutralNumbers, 
-            sellerHistory, 
-            startSet.id, 
-            true, 
-            isSmallSeller,
-            totalNeededFromSets
+            finalNum, availableMain, allCurrent, neutralNumbers, sellerHistory,
+            startSet.id, true, isSmallSeller, totalNeededFromSets
           );
           if (replacement) {
             mainNumbers.push(replacement);
             mainStationQuantities[replacement] = sheetsPerNumber;
-            currentMainPool[replacement]--;
+            currentMainPool[replacement] -= sheetsPerNumber;
           } else {
             shortages.push({ sellerId: seller.id, sellerName: seller.name, station: 'main', needed: 1, available: 0 });
           }
@@ -523,30 +588,30 @@ if (currentSetOffset > lotterySets.length * 2) break;
     const allAssigned = [...mainNumbers, ...subStationResults.flatMap(r => r.numbers)];
     const extremelyUglyCount = allAssigned.filter(n => EXTREMELY_UGLY_NUMBERS.includes(n)).length;
     const extremelyBeautifulCount = allAssigned.filter(n => EXTREMELY_BEAUTIFUL_NUMBERS.includes(n)).length;
-    
+
     if (extremelyUglyCount > 0 && extremelyBeautifulCount === 0) {
       // Try to find Extremely Beautiful in Sub Stations first (since we can't withdraw from Main)
       let foundInSub = false;
       for (const subRes of subStationResults) {
         const subPool = currentSubPools[subRes.id];
-        const availableExtremelyBeautiful = Object.keys(subPool).filter(n => 
-          subPool[n] > 0 && 
+        const availableExtremelyBeautiful = Object.keys(subPool).filter(n =>
+          subPool[n] >= sheetsPerNumber &&
           EXTREMELY_BEAUTIFUL_NUMBERS.includes(n) &&
           !allAssigned.includes(n) // AVOID DUPLICATES
         );
-        
+
         if (availableExtremelyBeautiful.length > 0) {
           const beauty = availableExtremelyBeautiful[0];
           // Find a replaceable number in this sub-station's result
           const replaceableIdx = subRes.numbers.findIndex(n => !EXTREMELY_UGLY_NUMBERS.includes(n) && !UGLY_NUMBERS.includes(n));
-          
+
           if (replaceableIdx !== -1) {
             const old = subRes.numbers[replaceableIdx];
             subRes.numbers[replaceableIdx] = beauty;
             subRes.quantities[beauty] = subRes.quantities[old];
             delete subRes.quantities[old];
-            subPool[beauty]--;
-            subPool[old]++;
+            subPool[beauty] -= subRes.quantities[beauty];
+            subPool[old] += subRes.quantities[beauty];
             foundInSub = true;
             // Update allAssigned for next iteration or beauty check
             allAssigned[allAssigned.indexOf(old)] = beauty;
@@ -557,8 +622,8 @@ if (currentSetOffset > lotterySets.length * 2) break;
 
       if (!foundInSub) {
         // Try Main Station if not found in Sub
-        const availableMain = Object.keys(currentMainPool).filter(n => 
-          currentMainPool[n] > 0 && 
+        const availableMain = Object.keys(currentMainPool).filter(n =>
+          currentMainPool[n] >= sheetsPerNumber &&
           EXTREMELY_BEAUTIFUL_NUMBERS.includes(n) &&
           !allAssigned.includes(n) // AVOID DUPLICATES
         );
@@ -566,14 +631,14 @@ if (currentSetOffset > lotterySets.length * 2) break;
         if (availableMain.length > 0) {
           const beauty = availableMain[0];
           const replaceableIdx = mainNumbers.findIndex(n => !EXTREMELY_UGLY_NUMBERS.includes(n) && !UGLY_NUMBERS.includes(n));
-          
+
           if (replaceableIdx !== -1) {
             const old = mainNumbers[replaceableIdx];
             mainNumbers[replaceableIdx] = beauty;
             mainStationQuantities[beauty] = mainStationQuantities[old];
             delete mainStationQuantities[old];
-            currentMainPool[beauty]--;
-            currentMainPool[old]++;
+            currentMainPool[beauty] -= mainStationQuantities[beauty];
+            currentMainPool[old] += mainStationQuantities[beauty];
             allAssigned[allAssigned.indexOf(old)] = beauty;
           } else {
             shortages.push({
@@ -601,14 +666,14 @@ if (currentSetOffset > lotterySets.length * 2) break;
     // Rule: Ugly must have Beautiful (Standard)
     const uglyCount = allAssigned.filter(n => UGLY_NUMBERS.includes(n)).length;
     const beautifulCount = allAssigned.filter(n => BEAUTIFUL_NUMBERS.includes(n)).length;
-    
+
     if (uglyCount > 0 && beautifulCount === 0) {
-      const replaceableIdx = mainNumbers.findIndex(n => isReplaceable(n));
+      const replaceableIdx = mainNumbers.findIndex(n => canWithdrawFromMain(n));
       if (replaceableIdx !== -1) {
         // Standard Beautiful can be taken from Main if available, but NOT Extremely Beautiful
-        const availableMain = Object.keys(currentMainPool).filter(n => 
-          currentMainPool[n] > 0 && 
-          BEAUTIFUL_NUMBERS.includes(n) && 
+        const availableMain = Object.keys(currentMainPool).filter(n =>
+          currentMainPool[n] >= sheetsPerNumber &&
+          BEAUTIFUL_NUMBERS.includes(n) &&
           !EXTREMELY_BEAUTIFUL_NUMBERS.includes(n) &&
           !allAssigned.includes(n) // AVOID DUPLICATES
         );
@@ -618,15 +683,94 @@ if (currentSetOffset > lotterySets.length * 2) break;
           mainNumbers[replaceableIdx] = beauty;
           mainStationQuantities[beauty] = mainStationQuantities[old];
           delete mainStationQuantities[old];
-          currentMainPool[beauty]--;
-          currentMainPool[old]++;
+          currentMainPool[beauty] -= mainStationQuantities[beauty];
+          currentMainPool[old] += mainStationQuantities[beauty];
           allAssigned[allAssigned.indexOf(old)] = beauty;
         }
       }
     }
 
-    const totalSheets = Object.values(mainStationQuantities).reduce((a, b) => a + b, 0) + 
-                       subStationResults.reduce((acc, r) => acc + Object.values(r.quantities).reduce((a, b) => a + b, 0), 0);
+    // 6. Desperate Fill for Shortages (Bù số để đủ lượng vé)
+    const assignedCount = mainNumbers.length + subStationResults.reduce((acc, r) => acc + r.numbers.length, 0);
+    const missingCount = totalNeededFromSets - assignedCount;
+
+    if (missingCount > 0) {
+      for (let i = 0; i < missingCount; i++) {
+        const allCurrent = [...mainNumbers, ...subStationResults.flatMap(r => r.numbers)];
+        let filled = false;
+
+        // Try sub stations first
+        for (const subRes of subStationResults) {
+          const subPool = currentSubPools[subRes.id];
+          const availableSub = Object.keys(subPool).filter(n =>
+            subPool[n] >= sheetsPerNumber &&
+            !allCurrent.includes(n) &&
+            !isNumberForbidden([...allCurrent, n]) &&
+            !violatesDistributionRules(n, allCurrent, totalNeededFromSets)
+          );
+          if (availableSub.length > 0) {
+            const num = availableSub[Math.floor(Math.random() * availableSub.length)];
+            subRes.numbers.push(num);
+            subRes.quantities[num] = sheetsPerNumber;
+            subPool[num] -= sheetsPerNumber;
+            filled = true;
+            break;
+          }
+        }
+
+        // Try main station next
+        if (!filled) {
+          const availableMain = Object.keys(currentMainPool).filter(n =>
+            currentMainPool[n] >= sheetsPerNumber &&
+            !allCurrent.includes(n) &&
+            !isNumberForbidden([...allCurrent, n]) &&
+            !violatesDistributionRules(n, allCurrent, totalNeededFromSets)
+          );
+          if (availableMain.length > 0) {
+            const num = availableMain[Math.floor(Math.random() * availableMain.length)];
+            mainNumbers.push(num);
+            mainStationQuantities[num] = sheetsPerNumber;
+            currentMainPool[num] -= sheetsPerNumber;
+            filled = true;
+          }
+        }
+
+        // Absolute desperate: ignore history/special rules, but NEVER duplicate tens
+        if (!filled) {
+          const desperateSub = subStationResults.flatMap(subRes => {
+            return Object.keys(currentSubPools[subRes.id])
+              .filter(n => currentSubPools[subRes.id][n] >= sheetsPerNumber && !allCurrent.includes(n))
+              .map(n => ({ station: subRes.id, num: n }));
+          });
+          const desperateMain = Object.keys(currentMainPool)
+            .filter(n => currentMainPool[n] >= sheetsPerNumber && !allCurrent.includes(n))
+            .map(n => ({ station: 'main', num: n }));
+
+          const allDesperate = [...desperateSub, ...desperateMain].filter(item => {
+            const decade = getDecade(item.num);
+            const decadeCount = allCurrent.filter(n => getDecade(n) === decade).length;
+            return decadeCount === 0;
+          });
+
+          if (allDesperate.length > 0) {
+            const pick = allDesperate[Math.floor(Math.random() * allDesperate.length)];
+            if (pick.station === 'main') {
+              mainNumbers.push(pick.num);
+              mainStationQuantities[pick.num] = sheetsPerNumber;
+              currentMainPool[pick.num] -= sheetsPerNumber;
+            } else {
+              const subRes = subStationResults.find(r => r.id === pick.station)!;
+              subRes.numbers.push(pick.num);
+              subRes.quantities[pick.num] = sheetsPerNumber;
+              currentSubPools[pick.station][pick.num] -= sheetsPerNumber;
+            }
+          }
+        }
+      }
+    }
+
+    const totalSheets = Object.values(mainStationQuantities).reduce((a, b) => a + b, 0) +
+      subStationResults.reduce((acc, r) => acc + Object.values(r.quantities).reduce((a, b) => a + b, 0), 0);
 
     results.push({
       date,
@@ -648,9 +792,9 @@ if (currentSetOffset > lotterySets.length * 2) break;
 
 // Helper for Rule 5: Replacement
 function findReplacement(
-  targetNum: string, 
-  pool: string[], 
-  existing: string[], 
+  targetNum: string,
+  pool: string[],
+  existing: string[],
   neutralPool: string[],
   history: string[],
   setId?: string,
@@ -662,11 +806,11 @@ function findReplacement(
   const targetDecade = getDecade(targetNum);
 
   const otherExisting = existing.filter(n => n !== targetNum);
-  
+
   // Base pool: Remove already used, history, forbidden, and EXTREMELY BEAUTIFUL
   // User: "TUYẾT ĐỐI KHÔNG RÚT SỐ CỰC ĐẸP KHÔNG CÓ TRƯỜNG HỢP NÀO HẾT"
-  let safePool = pool.filter(n => 
-    !existing.includes(n) && 
+  let safePool = pool.filter(n =>
+    !existing.includes(n) &&
     !history.includes(n) &&
     !isForbidden([...otherExisting, n], setId) &&
     !EXTREMELY_BEAUTIFUL_NUMBERS.includes(n)
@@ -683,16 +827,16 @@ function findReplacement(
   const isRestricted = (n: string) => {
     const decade = getDecade(n);
     const ending = n.slice(-1);
-    
+
     // Beautiful 3x/7x are restricted
     if ((decade === 3 || decade === 7) && BEAUTIFUL_NUMBERS.includes(n)) return true;
-    
+
     // 9x for small sellers is restricted
     if (isSmallSeller && decade === 9) return true;
-    
+
     // x8 for non-00 sets is restricted
     if (setId !== '00' && ending === '8') return true;
-    
+
     return false;
   };
 
@@ -718,10 +862,10 @@ function findReplacement(
       // Within p1, prefer same decade or same ending if possible (to stay close to target)
       const p1a = p1.filter(n => getDecade(n) === targetDecade && n.slice(-1) === targetEnding);
       if (p1a.length > 0) return p1a[Math.floor(Math.random() * p1a.length)];
-      
+
       const p1b = p1.filter(n => getDecade(n) === targetDecade || n.slice(-1) === targetEnding);
       if (p1b.length > 0) return p1b[Math.floor(Math.random() * p1b.length)];
-      
+
       return p1[Math.floor(Math.random() * p1.length)];
     }
 
