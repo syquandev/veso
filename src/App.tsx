@@ -1102,12 +1102,33 @@ export default function App() {
                         <p className="text-xs text-white/40 font-medium">Nhập tổng vé hiện có cho phiên phân phối</p>
                       </div>
                     </div>
-                    <button 
-                      onClick={() => setIsWeeklyScheduleOpen(true)}
-                      className="w-10 h-10 bg-white/5 flex items-center justify-center rounded-xl text-white/60 hover:bg-white/10 hover:text-white transition-colors"
-                    >
-                      <SlidersHorizontal size={20} />
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => {
+                          if (confirm('Xóa toàn bộ kho vé? Dữ liệu sẽ về 0.')) {
+                            setDailyInput(prev => ({
+                              ...prev,
+                              mainStationTickets: {},
+                              subStations: prev.subStations.map(s => ({ ...s, tickets: {} }))
+                            }));
+                            setSetInventory({});
+                            setCurrentPools({ main: {}, subPools: dailyInput.subStations.reduce((acc, s) => ({ ...acc, [s.id]: {} }), {} as Record<string, Record<string, number>>) });
+                            setResults([]);
+                            setShortages([]);
+                          }
+                        }}
+                        className="w-10 h-10 bg-rose-500/10 flex items-center justify-center rounded-xl text-rose-400 hover:bg-rose-500/20 hover:text-rose-300 transition-colors"
+                        title="Xóa toàn bộ kho vé"
+                      >
+                        <Trash2 size={18} />
+                      </button>
+                      <button 
+                        onClick={() => setIsWeeklyScheduleOpen(true)}
+                        className="w-10 h-10 bg-white/5 flex items-center justify-center rounded-xl text-white/60 hover:bg-white/10 hover:text-white transition-colors"
+                      >
+                        <SlidersHorizontal size={20} />
+                      </button>
+                    </div>
                   </div>
 
                   {/* Search and Quick Adjust Grid */}
