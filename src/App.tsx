@@ -234,20 +234,30 @@ export default function App() {
       
       const startSet = lotterySets[startSetIndex] || { id: '??' };
       
-      // Calculate split
-      const mainRatio = seller.customRatio !== undefined ? seller.customRatio / 100 : 0.7;
-      const mainQty = seller.mainEnabled ? Math.round(seller.targetTotalTickets * mainRatio) : 0;
+      // Calculate split using GLOBAL pool ratio (same as distributeTickets)
+      const totalMainPool = (Object.values(dailyInput.mainStationTickets) as number[]).reduce((a, b) => a + b, 0);
+      const totalSubPools: Record<string, number> = {};
+      dailyInput.subStations.forEach(sub => {
+        totalSubPools[sub.id] = (Object.values(sub.tickets) as number[]).reduce((a, b) => a + b, 0);
+      });
+      const totalAllPool = totalMainPool + Object.values(totalSubPools).reduce((a, b) => a + b, 0);
+      const globalRatio = totalAllPool > 0 ? totalMainPool / totalAllPool : 0.7;
+      const mainQty = seller.mainEnabled ? Math.round(seller.targetTotalTickets * globalRatio) : 0;
+      const remainingSub = seller.targetTotalTickets - mainQty;
+      const totalSubPoolSum = Object.values(totalSubPools).reduce((a, b) => a + b, 0);
       
-      const subResults = dailyInput.subStations.map(sub => {
-        const ratio = seller.subStationRatios?.[sub.id] || 0;
-        const qty = Math.round(seller.targetTotalTickets * (ratio / 100));
-        return {
-          id: sub.id,
-          name: sub.name,
-          numbers: [],
-          quantities: { "Dự kiến": qty }
-        };
-      }).filter(sr => (Object.values(sr.quantities)[0] as number) > 0);
+      const subResults = dailyInput.subStations
+        .filter(sub => totalSubPools[sub.id] > 0)
+        .map(sub => {
+          const subRatio = totalSubPoolSum > 0 ? totalSubPools[sub.id] / totalSubPoolSum : 1 / dailyInput.subStations.length;
+          const qty = Math.round(remainingSub * subRatio);
+          return {
+            id: sub.id,
+            name: sub.name,
+            numbers: [],
+            quantities: { "Dự kiến": qty }
+          };
+        }).filter(sr => (Object.values(sr.quantities)[0] as number) > 0);
 
       return {
         date: dailyInput.date,
@@ -1643,6 +1653,84 @@ export default function App() {
                         })}
                       </div>
                     </div>
+                    
+                    {/* Kho Còn Lại - Remaining Inventory After Distribution */}
+                    {results.length > 0 && (
+                      <div className="bg-[#181824] p-6 rounded-2xl border border-white/5 mb-6">
+                        <div className="flex items-center justify-between mb-4">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-amber-500/10 rounded-2xl flex items-center justify-center text-amber-400">
+                              <ClipboardList size={20} />
+                            </div>
+                            <div>
+                              <h3 className="text-lg font-bold text-white/90">Kho Còn Lại</h3>
+                              <p className="text-[10px] text-white/40 font-medium">Số lượng tờ còn lại sau khi chia</p>
+                            </div>
+                          </div>
+                        </div>
+                        
+                        {/* Main Station Remaining */}
+                        <div className="mb-4">
+                          <div className="text-[10px] font-bold text-indigo-400 uppercase mb-2 flex items-center gap-2">
+                            <span>Đài Chính</span>
+                            <span className="text-white/30">
+                              — Tổng còn: {(Object.values(currentPools.main) as number[]).reduce((a, b) => a + b, 0)} tờ
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap gap-1.5">
+                            {Array.from({ length: 100 }, (_, i) => i.toString().padStart(2, '0')).map(num => {
+                              const remaining = currentPools.main[num] || 0;
+                              const initial = dailyInput.mainStationTickets[num] || 0;
+                              if (initial === 0 && remaining === 0) return null;
+                              const used = initial - remaining;
+                              const pct = initial > 0 ? remaining / initial : 0;
+                              const colorClass = remaining === 0 ? 'bg-rose-500/20 border-rose-500/30 text-rose-400' 
+                                : pct < 0.3 ? 'bg-amber-500/15 border-amber-500/25 text-amber-400'
+                                : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400';
+                              return (
+                                <div key={num} className={`flex flex-col items-center px-1.5 py-1 rounded-lg border text-[10px] font-bold ${colorClass}`}>
+                                  <span className="text-xs font-black">{num}</span>
+                                  <span>{remaining}</span>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {/* Sub Stations Remaining */}
+                        {(dailyInput?.subStations || []).map(sub => {
+                          const subPool = currentPools.subPools[sub.id] || {};
+                          const subTotal = (Object.values(subPool) as number[]).reduce((a, b) => a + b, 0);
+                          const hasTickets = Object.keys(sub.tickets || {}).length > 0;
+                          if (!hasTickets) return null;
+                          return (
+                            <div key={sub.id} className="mt-3">
+                              <div className="text-[10px] font-bold text-emerald-400 uppercase mb-2 flex items-center gap-2">
+                                <span>{sub.name}</span>
+                                <span className="text-white/30">— Tổng còn: {subTotal} tờ</span>
+                              </div>
+                              <div className="flex flex-wrap gap-1.5">
+                                {Array.from({ length: 100 }, (_, i) => i.toString().padStart(2, '0')).map(num => {
+                                  const remaining = subPool[num] || 0;
+                                  const initial = sub.tickets[num] || 0;
+                                  if (initial === 0 && remaining === 0) return null;
+                                  const pct = initial > 0 ? remaining / initial : 0;
+                                  const colorClass = remaining === 0 ? 'bg-rose-500/20 border-rose-500/30 text-rose-400' 
+                                    : pct < 0.3 ? 'bg-amber-500/15 border-amber-500/25 text-amber-400'
+                                    : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400';
+                                  return (
+                                    <div key={num} className={`flex flex-col items-center px-1.5 py-1 rounded-lg border text-[10px] font-bold ${colorClass}`}>
+                                      <span className="text-xs font-black">{num}</span>
+                                      <span>{remaining}</span>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                     
                     <div className="space-y-4">
                       {(() => {

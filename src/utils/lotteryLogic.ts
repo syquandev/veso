@@ -90,6 +90,20 @@ export function distributeTickets(
     currentSubPools[s.id] = { ...s.tickets };
   });
 
+  // Calculate global pool ratios from input quantities
+  // This ensures every seller gets the SAME proportional split across all stations
+  const totalMainPoolQty = Object.values(mainStationPool).reduce((a, b) => a + b, 0);
+  const totalSubPoolQtys: Record<string, number> = {};
+  const activeSubStations: { id: string, name: string }[] = [];
+  subStations.forEach(s => {
+    const subTotal = Object.values(s.tickets).reduce((a, b) => a + b, 0);
+    totalSubPoolQtys[s.id] = subTotal;
+    if (subTotal > 0) activeSubStations.push({ id: s.id, name: s.name });
+  });
+  const totalAllPoolQty = totalMainPoolQty + Object.values(totalSubPoolQtys).reduce((a, b) => a + b, 0);
+  const globalMainRatio = totalAllPoolQty > 0 ? totalMainPoolQty / totalAllPoolQty : 0.7;
+  const globalSubRatioTotal = Object.values(totalSubPoolQtys).reduce((a, b) => a + b, 0);
+
   // 1. Determine Base Set Index from Date
   const day = new Date(date).getDate();
   const baseSetIndex = (day - 1) % lotterySets.length;
@@ -260,28 +274,27 @@ export function distributeTickets(
         targetSubCounts[id] = Math.ceil(qty / sheetsPerNumber);
       });
     } else {
-      const mainRatio = seller.customRatio !== undefined ? seller.customRatio / 100 : 0.7;
-      targetMainCount = seller.mainEnabled ? Math.round(remainingNumbersNeeded * mainRatio) : 0;
+      // Use GLOBAL pool ratio so every seller gets the same proportional split
+      // This ensures everyone has all sub-stations with equal percentage
+      const effectiveMainRatio = totalAllPoolQty > 0 ? globalMainRatio : (seller.customRatio !== undefined ? seller.customRatio / 100 : 0.7);
+      targetMainCount = seller.mainEnabled ? Math.round(remainingNumbersNeeded * effectiveMainRatio) : 0;
 
       const totalSubNeeded = remainingNumbersNeeded - targetMainCount;
-      const subStationIds = Object.keys(seller.subStationRatios);
-      const totalSubRatio = Object.values(seller.subStationRatios).reduce((a, b) => a + b, 0);
 
-      if (totalSubRatio > 0) {
+      // Distribute to ALL active sub-stations proportionally based on input pool quantities
+      if (activeSubStations.length > 0 && totalSubNeeded > 0) {
         let allocatedSub = 0;
-        subStationIds.forEach((id, idx) => {
-          if (idx === subStationIds.length - 1) {
-            targetSubCounts[id] = totalSubNeeded - allocatedSub;
+        activeSubStations.forEach((sub, idx) => {
+          if (idx === activeSubStations.length - 1) {
+            // Last sub-station gets the remainder to avoid rounding issues
+            targetSubCounts[sub.id] = Math.max(1, totalSubNeeded - allocatedSub);
           } else {
-            const count = Math.round((seller.subStationRatios[id] / totalSubRatio) * totalSubNeeded);
-            targetSubCounts[id] = count;
+            // Proportional based on input pool size
+            const subRatio = globalSubRatioTotal > 0 ? totalSubPoolQtys[sub.id] / globalSubRatioTotal : 1 / activeSubStations.length;
+            const count = Math.max(1, Math.round(subRatio * totalSubNeeded));
+            targetSubCounts[sub.id] = count;
             allocatedSub += count;
           }
-        });
-      } else if (totalSubNeeded > 0 && subStationIds.length > 0) {
-        const countPerSub = Math.floor(totalSubNeeded / subStationIds.length);
-        subStationIds.forEach((id, idx) => {
-          targetSubCounts[id] = idx === subStationIds.length - 1 ? totalSubNeeded - (countPerSub * (subStationIds.length - 1)) : countPerSub;
         });
       }
     }
@@ -385,8 +398,9 @@ export function distributeTickets(
     } else if (totalAssignedCount > 15 && totalAssignedCount <= 20) {
       ensureDecades(1, 1); // Add one 0x and one 9x
     } else if (totalAssignedCount > 20) {
-      const setsCount = Math.floor(totalAssignedCount / 10);
-      ensureDecades(setsCount, setsCount); // e.g. 30 numbers -> 3 of each
+      // Cap at 2 to avoid over-assigning 0x/9x numbers
+      const setsCount = Math.min(2, Math.floor(totalAssignedCount / 10));
+      ensureDecades(setsCount, setsCount);
     }
 
     // Ensure all decades for 15+ numbers
@@ -476,10 +490,11 @@ export function distributeTickets(
       const targetDecade = getDecade(targetNum);
       const targetVal = parseInt(targetNum);
 
-      // Filter out already assigned and forbidden
+      // Filter out already assigned, forbidden, and decade/ending violations
       const safe = availableSub.filter(n =>
         !allAssigned.includes(n) &&
-        !isNumberForbidden([...allAssigned, n], startSet.id)
+        !isNumberForbidden([...allAssigned, n], startSet.id) &&
+        !violatesDistributionRules(n, allAssigned, totalNeededFromSets)
       );
       if (safe.length === 0) return null;
 
@@ -663,29 +678,60 @@ export function distributeTickets(
       }
     }
 
-    // Rule: Ugly must have Beautiful (Standard)
+    // Rule: Ugly must have Beautiful (Standard) - try sub-stations first, then main
     const uglyCount = allAssigned.filter(n => UGLY_NUMBERS.includes(n)).length;
     const beautifulCount = allAssigned.filter(n => BEAUTIFUL_NUMBERS.includes(n)).length;
 
     if (uglyCount > 0 && beautifulCount === 0) {
-      const replaceableIdx = mainNumbers.findIndex(n => canWithdrawFromMain(n));
-      if (replaceableIdx !== -1) {
-        // Standard Beautiful can be taken from Main if available, but NOT Extremely Beautiful
-        const availableMain = Object.keys(currentMainPool).filter(n =>
-          currentMainPool[n] >= sheetsPerNumber &&
+      let foundStdBeautiful = false;
+
+      // Try sub stations first for standard beautiful
+      for (const subRes of subStationResults) {
+        const subPool = currentSubPools[subRes.id];
+        const availableBeautiful = Object.keys(subPool).filter(n =>
+          subPool[n] >= sheetsPerNumber &&
           BEAUTIFUL_NUMBERS.includes(n) &&
-          !EXTREMELY_BEAUTIFUL_NUMBERS.includes(n) &&
-          !allAssigned.includes(n) // AVOID DUPLICATES
+          !allAssigned.includes(n)
         );
-        if (availableMain.length > 0) {
-          const beauty = availableMain[0];
-          const old = mainNumbers[replaceableIdx];
-          mainNumbers[replaceableIdx] = beauty;
-          mainStationQuantities[beauty] = mainStationQuantities[old];
-          delete mainStationQuantities[old];
-          currentMainPool[beauty] -= mainStationQuantities[beauty];
-          currentMainPool[old] += mainStationQuantities[beauty];
-          allAssigned[allAssigned.indexOf(old)] = beauty;
+        if (availableBeautiful.length > 0) {
+          const beauty = availableBeautiful[0];
+          const replaceableIdx = subRes.numbers.findIndex(n =>
+            !UGLY_NUMBERS.includes(n) && !BEAUTIFUL_NUMBERS.includes(n)
+          );
+          if (replaceableIdx !== -1) {
+            const old = subRes.numbers[replaceableIdx];
+            subRes.numbers[replaceableIdx] = beauty;
+            subRes.quantities[beauty] = subRes.quantities[old];
+            delete subRes.quantities[old];
+            subPool[beauty] -= subRes.quantities[beauty];
+            subPool[old] = (subPool[old] || 0) + subRes.quantities[beauty];
+            allAssigned[allAssigned.indexOf(old)] = beauty;
+            foundStdBeautiful = true;
+            break;
+          }
+        }
+      }
+
+      if (!foundStdBeautiful) {
+        // Try main station
+        const replaceableIdx = mainNumbers.findIndex(n => canWithdrawFromMain(n));
+        if (replaceableIdx !== -1) {
+          const availableMain = Object.keys(currentMainPool).filter(n =>
+            currentMainPool[n] >= sheetsPerNumber &&
+            BEAUTIFUL_NUMBERS.includes(n) &&
+            !EXTREMELY_BEAUTIFUL_NUMBERS.includes(n) &&
+            !allAssigned.includes(n)
+          );
+          if (availableMain.length > 0) {
+            const beauty = availableMain[0];
+            const old = mainNumbers[replaceableIdx];
+            mainNumbers[replaceableIdx] = beauty;
+            mainStationQuantities[beauty] = mainStationQuantities[old];
+            delete mainStationQuantities[old];
+            currentMainPool[beauty] -= mainStationQuantities[beauty];
+            currentMainPool[old] = (currentMainPool[old] || 0) + mainStationQuantities[beauty];
+            allAssigned[allAssigned.indexOf(old)] = beauty;
+          }
         }
       }
     }
@@ -764,6 +810,106 @@ export function distributeTickets(
               subRes.quantities[pick.num] = sheetsPerNumber;
               currentSubPools[pick.station][pick.num] -= sheetsPerNumber;
             }
+          }
+        }
+      }
+    }
+
+    // 7. Post-Fill: Re-check Ugly/Beautiful balance after desperate fill
+    const finalAssigned = [...mainNumbers, ...subStationResults.flatMap(r => r.numbers)];
+
+    // Re-check Extremely Ugly must have Extremely Beautiful
+    const reExtrUgly = finalAssigned.filter(n => EXTREMELY_UGLY_NUMBERS.includes(n)).length;
+    const reExtrBeautiful = finalAssigned.filter(n => EXTREMELY_BEAUTIFUL_NUMBERS.includes(n)).length;
+
+    if (reExtrUgly > 0 && reExtrBeautiful === 0) {
+      let fixed = false;
+      // Try sub stations
+      for (const subRes of subStationResults) {
+        const subPool = currentSubPools[subRes.id];
+        const available = Object.keys(subPool).filter(n =>
+          subPool[n] >= sheetsPerNumber && EXTREMELY_BEAUTIFUL_NUMBERS.includes(n) && !finalAssigned.includes(n)
+        );
+        if (available.length > 0) {
+          const beauty = available[0];
+          const ri = subRes.numbers.findIndex(n => !UGLY_NUMBERS.includes(n) && !BEAUTIFUL_NUMBERS.includes(n));
+          if (ri !== -1) {
+            const old = subRes.numbers[ri];
+            subRes.numbers[ri] = beauty;
+            subRes.quantities[beauty] = subRes.quantities[old];
+            delete subRes.quantities[old];
+            subPool[beauty] -= subRes.quantities[beauty];
+            subPool[old] = (subPool[old] || 0) + subRes.quantities[beauty];
+            finalAssigned[finalAssigned.indexOf(old)] = beauty;
+            fixed = true;
+            break;
+          }
+        }
+      }
+      if (!fixed) {
+        const available = Object.keys(currentMainPool).filter(n =>
+          currentMainPool[n] >= sheetsPerNumber && EXTREMELY_BEAUTIFUL_NUMBERS.includes(n) && !finalAssigned.includes(n)
+        );
+        if (available.length > 0) {
+          const beauty = available[0];
+          const ri = mainNumbers.findIndex(n => !UGLY_NUMBERS.includes(n) && !BEAUTIFUL_NUMBERS.includes(n));
+          if (ri !== -1) {
+            const old = mainNumbers[ri];
+            mainNumbers[ri] = beauty;
+            mainStationQuantities[beauty] = mainStationQuantities[old];
+            delete mainStationQuantities[old];
+            currentMainPool[beauty] -= mainStationQuantities[beauty];
+            currentMainPool[old] = (currentMainPool[old] || 0) + mainStationQuantities[beauty];
+            finalAssigned[finalAssigned.indexOf(old)] = beauty;
+          }
+        }
+      }
+    }
+
+    // Re-check Ugly must have Beautiful
+    const reUgly = finalAssigned.filter(n => UGLY_NUMBERS.includes(n)).length;
+    const reBeautiful = finalAssigned.filter(n => BEAUTIFUL_NUMBERS.includes(n)).length;
+
+    if (reUgly > 0 && reBeautiful === 0) {
+      let fixed = false;
+      // Try sub stations first
+      for (const subRes of subStationResults) {
+        const subPool = currentSubPools[subRes.id];
+        const available = Object.keys(subPool).filter(n =>
+          subPool[n] >= sheetsPerNumber && BEAUTIFUL_NUMBERS.includes(n) && !finalAssigned.includes(n)
+        );
+        if (available.length > 0) {
+          const beauty = available[0];
+          const ri = subRes.numbers.findIndex(n => !UGLY_NUMBERS.includes(n) && !BEAUTIFUL_NUMBERS.includes(n));
+          if (ri !== -1) {
+            const old = subRes.numbers[ri];
+            subRes.numbers[ri] = beauty;
+            subRes.quantities[beauty] = subRes.quantities[old];
+            delete subRes.quantities[old];
+            subPool[beauty] -= subRes.quantities[beauty];
+            subPool[old] = (subPool[old] || 0) + subRes.quantities[beauty];
+            finalAssigned[finalAssigned.indexOf(old)] = beauty;
+            fixed = true;
+            break;
+          }
+        }
+      }
+      if (!fixed) {
+        const available = Object.keys(currentMainPool).filter(n =>
+          currentMainPool[n] >= sheetsPerNumber && BEAUTIFUL_NUMBERS.includes(n) &&
+          !EXTREMELY_BEAUTIFUL_NUMBERS.includes(n) && !finalAssigned.includes(n)
+        );
+        if (available.length > 0) {
+          const beauty = available[0];
+          const ri = mainNumbers.findIndex(n => canWithdrawFromMain(n));
+          if (ri !== -1) {
+            const old = mainNumbers[ri];
+            mainNumbers[ri] = beauty;
+            mainStationQuantities[beauty] = mainStationQuantities[old];
+            delete mainStationQuantities[old];
+            currentMainPool[beauty] -= mainStationQuantities[beauty];
+            currentMainPool[old] = (currentMainPool[old] || 0) + mainStationQuantities[beauty];
+            finalAssigned[finalAssigned.indexOf(old)] = beauty;
           }
         }
       }
