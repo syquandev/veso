@@ -579,7 +579,25 @@ export default function App() {
     if (savedWeekly) setWeeklySchedules(JSON.parse(savedWeekly));
 
     const savedDailyInput = localStorage.getItem('lottery_daily_input');
-    if (savedDailyInput) setDailyInput(JSON.parse(savedDailyInput));
+    if (savedDailyInput) {
+      const parsed = JSON.parse(savedDailyInput);
+      const today = new Date().toISOString().split('T')[0];
+      if (parsed.date && parsed.date !== today) {
+        // New day: reset inventory but keep station structure
+        const resetInput = {
+          ...parsed,
+          date: today,
+          mainStationTickets: {},
+          subStations: (parsed.subStations || []).map((s: any) => ({ ...s, tickets: {} }))
+        };
+        setDailyInput(resetInput);
+        setSetInventory({});
+        setResults([]);
+        setShortages([]);
+      } else {
+        setDailyInput(parsed);
+      }
+    }
 
     const savedStationConfigs = localStorage.getItem('lottery_station_configs');
     if (savedStationConfigs) setStationConfigs(JSON.parse(savedStationConfigs));
@@ -899,7 +917,20 @@ export default function App() {
               <input 
                 type="date" 
                 value={dailyInput.date}
-                onChange={(e) => setDailyInput({ ...dailyInput, date: e.target.value })}
+                onChange={(e) => {
+                  const newDate = e.target.value;
+                  if (newDate !== dailyInput.date) {
+                    setDailyInput(prev => ({
+                      ...prev,
+                      date: newDate,
+                      mainStationTickets: {},
+                      subStations: prev.subStations.map(s => ({ ...s, tickets: {} }))
+                    }));
+                    setSetInventory({});
+                    setResults([]);
+                    setShortages([]);
+                  }
+                }}
                 className="w-full bg-transparent pl-6 pr-1 text-xs font-bold text-white/90 outline-none cursor-pointer [&::-webkit-calendar-picker-indicator]:opacity-0 [&::-webkit-calendar-picker-indicator]:absolute [&::-webkit-calendar-picker-indicator]:inset-0 [&::-webkit-calendar-picker-indicator]:w-full [&::-webkit-calendar-picker-indicator]:h-full [&::-webkit-calendar-picker-indicator]:cursor-pointer"
               />
             </div>
