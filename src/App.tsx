@@ -588,7 +588,11 @@ export default function App() {
           ...parsed,
           date: today,
           mainStationTickets: {},
-          subStations: (parsed.subStations || []).map((s: any) => ({ ...s, tickets: {} }))
+          subStations: (parsed.subStations || []).map((s: any) => {
+            const config = stationConfigs.find(c => c.dayOfWeek === new Date(today).getDay());
+            const subConfig = config?.subStations.find(sub => sub.id === s.id);
+            return { ...s, name: subConfig?.name || s.name, tickets: {} };
+          })
         };
         setDailyInput(resetInput);
         setSetInventory({});
@@ -924,7 +928,11 @@ export default function App() {
                       ...prev,
                       date: newDate,
                       mainStationTickets: {},
-                      subStations: prev.subStations.map(s => ({ ...s, tickets: {} }))
+                      subStations: prev.subStations.map(s => {
+                        const config = stationConfigs.find(c => c.dayOfWeek === new Date(newDate).getDay());
+                        const subConfig = config?.subStations.find(sub => sub.id === s.id);
+                        return { ...s, name: subConfig?.name || s.name, tickets: {} };
+                      })
                     }));
                     setSetInventory({});
                     setResults([]);
@@ -1159,6 +1167,54 @@ export default function App() {
                       >
                         <SlidersHorizontal size={20} />
                       </button>
+                    </div>
+                  </div>
+
+                  {/* Dashboard Summary & +% Scaling */}
+                  <div className="grid grid-cols-2 gap-4 mb-6">
+                    <div className="bg-[#13131A] p-4 rounded-xl border border-white/5">
+                      <div className="text-[10px] font-bold text-white/40 uppercase mb-2">Tổng vé yêu cầu (Khách)</div>
+                      <div className="text-2xl font-black text-indigo-400 mb-2">
+                        {sellers.filter(s => s.isEnabled).reduce((acc, s) => acc + s.targetTotalTickets, 0)} <span className="text-sm font-bold text-white/30">tờ</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input type="number" id="sellerScalePct" className="w-14 bg-white/5 border border-white/10 rounded-lg py-1 px-2 text-[11px] text-white outline-none" placeholder="%" />
+                        <button onClick={() => {
+                          const pct = parseInt((document.getElementById('sellerScalePct') as HTMLInputElement).value) || 0;
+                          if (pct > 0 && confirm(`Tăng lượng vé yêu cầu của tất cả khách lên ${pct}%?`)) {
+                            setSellers(prev => prev.map(s => ({
+                              ...s,
+                              targetTotalTickets: Math.ceil(s.targetTotalTickets * (1 + pct / 100))
+                            })));
+                          }
+                        }} className="px-2 py-1 bg-indigo-500/10 text-indigo-400 text-[10px] font-bold rounded-lg hover:bg-indigo-500/20 transition-all">+ Tăng %</button>
+                      </div>
+                    </div>
+                    <div className="bg-[#13131A] p-4 rounded-xl border border-white/5">
+                      <div className="text-[10px] font-bold text-white/40 uppercase mb-2">Tổng vé hiện có (Kho)</div>
+                      <div className={`text-2xl font-black mb-2 ${((Object.values(dailyInput.mainStationTickets) as number[]).reduce((a, b) => a + b, 0) + dailyInput.subStations.reduce((acc, sub) => acc + (Object.values(sub.tickets) as number[]).reduce((a, b) => a + b, 0), 0)) >= sellers.filter(s => s.isEnabled).reduce((acc, s) => acc + s.targetTotalTickets, 0) ? 'text-emerald-400' : 'text-rose-400'}`}>
+                        {((Object.values(dailyInput.mainStationTickets) as number[]).reduce((a, b) => a + b, 0) + dailyInput.subStations.reduce((acc, sub) => acc + (Object.values(sub.tickets) as number[]).reduce((a, b) => a + b, 0), 0))} <span className="text-sm font-bold text-white/30">tờ</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <input type="number" id="inventoryScalePct" className="w-14 bg-white/5 border border-white/10 rounded-lg py-1 px-2 text-[11px] text-white outline-none" placeholder="%" />
+                        <button onClick={() => {
+                          const pct = parseInt((document.getElementById('inventoryScalePct') as HTMLInputElement).value) || 0;
+                          if (pct > 0 && confirm(`Tăng lượng vé trong kho lên ${pct}%?`)) {
+                            setDailyInput(prev => {
+                              const newState = JSON.parse(JSON.stringify(prev));
+                              Object.keys(newState.mainStationTickets).forEach(k => {
+                                newState.mainStationTickets[k] = Math.ceil(newState.mainStationTickets[k] * (1 + pct / 100));
+                              });
+                              newState.subStations.forEach((sub: any) => {
+                                Object.keys(sub.tickets).forEach(k => {
+                                  sub.tickets[k] = Math.ceil(sub.tickets[k] * (1 + pct / 100));
+                                });
+                              });
+                              return newState;
+                            });
+                          }
+                        }} className="px-2 py-1 bg-emerald-500/10 text-emerald-400 text-[10px] font-bold rounded-lg hover:bg-emerald-500/20 transition-all">+ Tăng %</button>
+                      </div>
                     </div>
                   </div>
 
@@ -1589,7 +1645,7 @@ export default function App() {
                                   <div className="flex flex-col gap-1">
                                     {result?.subStationResults.map(sr => sr.numbers.length > 0 && (
                                       <div key={sr.id} className="flex flex-wrap gap-1 items-center">
-                                        <span className="text-[11px] font-bold text-white/40 uppercase mr-1 truncate max-w-[40px]">{sr.name}:</span>
+                                        <span className="text-[11px] font-bold text-white/40 uppercase mr-1 min-w-[50px]">{sr.name}:</span>
                                         {sr.numbers.map(n => {
                                           const qty = sr.quantities?.[n];
                                           return (
@@ -2913,20 +2969,20 @@ export default function App() {
                                   </div>
                                   <div className="flex-1">
                                     <label className="text-[11px] font-bold text-white/40 uppercase mb-1 block">Số lượng vé</label>
-                                    <select 
-                                      value={pref.quantity}
-                                      onChange={(e) => {
-                                        const newPrefs = [...(seller.customPreferences || [])];
-                                        newPrefs[idx].quantity = parseInt(e.target.value);
-                                        updateSeller(seller.id, { customPreferences: newPrefs });
-                                      }}
-                                      className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white text-sm font-bold text-white/80 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
-                                    >
-                                      <option value={16}>16 tờ</option>
-                                      <option value={32}>32 tờ</option>
-                                      <option value={160}>160 tờ</option>
-                                      <option value={320}>320 tờ</option>
-                                    </select>
+                                    <div className="flex items-center gap-2">
+                                      <input 
+                                        type="number"
+                                        value={pref.quantity || ''}
+                                        onChange={(e) => {
+                                          const newPrefs = [...(seller.customPreferences || [])];
+                                          newPrefs[idx].quantity = parseInt(e.target.value) || 0;
+                                          updateSeller(seller.id, { customPreferences: newPrefs });
+                                        }}
+                                        className="w-full bg-white/5 border border-white/10 rounded-xl px-3 py-2 text-white text-sm font-bold text-white/80 focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none"
+                                        placeholder="0"
+                                      />
+                                      <span className="text-[11px] font-bold text-white/40">tờ</span>
+                                    </div>
                                   </div>
                                   <button 
                                     onClick={() => {
