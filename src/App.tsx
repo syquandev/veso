@@ -1850,9 +1850,9 @@ export default function App() {
                           animate={{ opacity: 1, x: 0 }}
                           transition={{ delay: idx * 0.1 }}
                           key={res.sellerId}
-                          className="bg-[#181824] rounded-2xl p-6 border border-white/5 hover:border-white/10 transition-all"
+                          className="bg-[#181824] rounded-2xl p-4 border border-white/5 hover:border-white/10 transition-all"
                         >
-                          <div className="flex justify-between items-start mb-6">
+                          <div className="flex justify-between items-start mb-4">
                             <div>
                               <h4 className="text-xl font-bold text-white/90">{res.sellerName}</h4>
                               <div className="flex items-center gap-2 mt-1">
@@ -1875,18 +1875,18 @@ export default function App() {
                             </div>
                           </div>
 
-                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="bg-[#13131A] p-4 rounded-xl border border-white/5">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <div className="bg-[#13131A] p-3 rounded-xl border border-white/5">
                               <div className="flex items-center gap-2 text-xs font-bold text-white/40 uppercase mb-3">
                                 <Hash size={14} />
                                 Đài Chính
                               </div>
-                              <div className="flex flex-wrap gap-2">
+                              <div className="flex flex-wrap gap-1.5">
                                 {res.mainStationNumbers.map(n => {
                                   const qty = res.mainStationQuantities?.[n];
                                   return (
                                     <div key={n} className="flex flex-col items-center gap-1">
-                                      <span className="w-10 h-10 flex items-center justify-center bg-[#1A1A24] border border-white/10 rounded-lg font-bold text-white/80 shadow-lg shadow-black/10">
+                                      <span className="w-8 h-8 flex items-center justify-center bg-[#1A1A24] border border-white/10 rounded-lg font-bold text-[13px] text-white/80 shadow-lg shadow-black/10">
                                         {n}
                                       </span>
                                       {qty && qty !== (sellers.find(s => s.id === res.sellerId)?.sheetsOption === '32' ? 32 : (sellers.find(s => s.id === res.sellerId)?.sheetsOption === 'custom' ? (sellers.find(s => s.id === res.sellerId)?.customSheets || 16) : 16)) && (
@@ -1898,17 +1898,17 @@ export default function App() {
                               </div>
                             </div>
                             {res.subStationResults.map(subRes => (
-                              <div key={subRes.id} className="bg-indigo-500/5 p-4 rounded-xl border border-indigo-500/10">
+                              <div key={subRes.id} className="bg-indigo-500/5 p-3 rounded-xl border border-indigo-500/10">
                                 <div className="flex items-center gap-2 text-xs font-bold text-indigo-400 uppercase mb-3">
                                   <Hash size={14} />
                                   {subRes.name}
                                 </div>
-                                <div className="flex flex-wrap gap-2">
+                                <div className="flex flex-wrap gap-1.5">
                                   {subRes.numbers.map(n => {
                                     const qty = subRes.quantities?.[n];
                                     return (
                                       <div key={n} className="flex flex-col items-center gap-1">
-                                        <span className="w-10 h-10 flex items-center justify-center bg-indigo-500/10 border border-indigo-500/20 rounded-lg font-bold text-indigo-400 shadow-lg shadow-black/10">
+                                        <span className="w-8 h-8 flex items-center justify-center bg-indigo-500/10 border border-indigo-500/20 rounded-lg font-bold text-[13px] text-indigo-400 shadow-lg shadow-black/10">
                                           {n}
                                         </span>
                                         {qty && qty !== (sellers.find(s => s.id === res.sellerId)?.sheetsOption === '32' ? 32 : (sellers.find(s => s.id === res.sellerId)?.sheetsOption === 'custom' ? (sellers.find(s => s.id === res.sellerId)?.customSheets || 16) : 16)) && (
