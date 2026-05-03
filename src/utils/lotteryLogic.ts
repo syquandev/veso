@@ -108,6 +108,31 @@ export function distributeTickets(
   const day = new Date(date).getDate();
   const baseSetIndex = (day - 1) % lotterySets.length;
 
+  // Rule 12: Global ugly number weekly tracking
+  // Count how many times each ugly number appeared across ALL sellers this week
+  const allUglyNumbers = [...UGLY_NUMBERS]; // 00,04,05,45,85,20,40,50,60,80,90
+  const weeklyUglyGlobal: Record<string, number> = {};
+  allUglyNumbers.forEach(num => {
+    weeklyUglyGlobal[num] = history
+      .slice(0, 7)
+      .flatMap(dayResults => dayResults)
+      .flatMap(r => [...r.mainStationNumbers, ...r.subStationResults.flatMap(sr => sr.numbers)])
+      .filter(n => n === num).length;
+  });
+
+  // Track ugly numbers assigned TODAY across all sellers (for global enforcement)
+  const todayUglyAssignments: Record<string, string[]> = {}; // uglyNum -> [sellerId]
+  allUglyNumbers.forEach(num => { todayUglyAssignments[num] = []; });
+
+  // Track which seller got which ugly number yesterday (for non-consecutive rule)
+  const yesterdayUglyPerSeller: Record<string, string[]> = {}; // sellerId -> [uglyNums]
+  if (history.length > 0) {
+    history[0].forEach(r => {
+      const allNums = [...r.mainStationNumbers, ...r.subStationResults.flatMap(sr => sr.numbers)];
+      yesterdayUglyPerSeller[r.sellerId] = allNums.filter(n => UGLY_NUMBERS.includes(n));
+    });
+  }
+
   const enabledSellers = sellers
     .map((s, index) => ({ seller: s, originalIndex: index }))
     .filter(item => item.seller.isEnabled)
@@ -448,6 +473,8 @@ export function distributeTickets(
       const ending = n.slice(-1);
       // Cannot withdraw beautiful numbers
       if (BEAUTIFUL_NUMBERS.includes(n)) return false;
+      // Cannot withdraw ugly numbers (phải giữ + phải xả)
+      if (UGLY_NUMBERS.includes(n)) return false;
       // Cannot withdraw 0x numbers
       if (decade === 0) return false;
       // Cannot withdraw x0 numbers
@@ -456,6 +483,8 @@ export function distributeTickets(
       if (ending === '8' || ending === '9') return false;
       // Cannot withdraw 99
       if (n === '99') return false;
+      // Cannot withdraw 63
+      if (n === '63') return false;
       // 9x can be withdrawn but sparingly - allow but deprioritize
       return true;
     };
@@ -933,7 +962,227 @@ export function distributeTickets(
     });
   });
 
+  // ===== POST-DISTRIBUTION: Ugly Number Weekly Enforcement (Rule 12) =====
+  // Count today's ugly number assignments
+  results.forEach(r => {
+    const allNums = [...r.mainStationNumbers, ...r.subStationResults.flatMap(sr => sr.numbers)];
+    allNums.forEach(num => {
+      if (UGLY_NUMBERS.includes(num)) {
+        if (!todayUglyAssignments[num]) todayUglyAssignments[num] = [];
+        todayUglyAssignments[num].push(r.sellerId);
+      }
+    });
+  });
+
+  // Check which ugly numbers are under-distributed (need at least 2/week)
+  const underDistributedUgly = allUglyNumbers.filter(num => {
+    const weeklyTotal = (weeklyUglyGlobal[num] || 0) + (todayUglyAssignments[num]?.length || 0);
+    return weeklyTotal < 2;
+  });
+
+  // Try to inject under-distributed ugly numbers into sellers who:
+  // 1. Didn't receive this ugly number yesterday (non-consecutive)
+  // 2. Haven't received too many ugly numbers already
+  // 3. Have a neutral number that can be swapped
+  if (underDistributedUgly.length > 0) {
+    for (const uglyNum of underDistributedUgly) {
+      // Find eligible sellers (spread across sellers, don't dồn 1 người)
+      const eligibleResults = results.filter(r => {
+        const yesterdayUgly = yesterdayUglyPerSeller[r.sellerId] || [];
+        if (yesterdayUgly.includes(uglyNum)) return false; // Non-consecutive
+        const allNums = [...r.mainStationNumbers, ...r.subStationResults.flatMap(sr => sr.numbers)];
+        if (allNums.includes(uglyNum)) return false; // Already has it
+        if (isForbidden([...allNums, uglyNum])) return false; // Forbidden combo
+        // Count ugly numbers already assigned to this seller today
+        const uglyCount = allNums.filter(n => UGLY_NUMBERS.includes(n)).length;
+        if (uglyCount >= 3) return false; // Don't overload one seller
+        return true;
+      });
+
+      if (eligibleResults.length > 0) {
+        // Pick the seller with the fewest ugly numbers today
+        const target = eligibleResults.sort((a, b) => {
+          const aUgly = [...a.mainStationNumbers, ...a.subStationResults.flatMap(sr => sr.numbers)]
+            .filter(n => UGLY_NUMBERS.includes(n)).length;
+          const bUgly = [...b.mainStationNumbers, ...b.subStationResults.flatMap(sr => sr.numbers)]
+            .filter(n => UGLY_NUMBERS.includes(n)).length;
+          return aUgly - bUgly;
+        })[0];
+
+        // Find a neutral number in main to swap
+        const neutralIdx = target.mainStationNumbers.findIndex(n =>
+          !BEAUTIFUL_NUMBERS.includes(n) &&
+          !UGLY_NUMBERS.includes(n) &&
+          !EXTREMELY_BEAUTIFUL_NUMBERS.includes(n) &&
+          n !== '63'
+        );
+
+        if (neutralIdx !== -1 && currentMainPool[uglyNum] !== undefined) {
+          const oldNum = target.mainStationNumbers[neutralIdx];
+          const qty = target.mainStationQuantities?.[oldNum] || 16;
+          target.mainStationNumbers[neutralIdx] = uglyNum;
+          if (target.mainStationQuantities) {
+            target.mainStationQuantities[uglyNum] = qty;
+            delete target.mainStationQuantities[oldNum];
+          }
+          // Return old number to pool, take ugly from pool
+          currentMainPool[oldNum] = (currentMainPool[oldNum] || 0) + qty;
+          currentMainPool[uglyNum] = (currentMainPool[uglyNum] || 0) - qty;
+          target.mainStationNumbers.sort((a, b) => parseInt(a) - parseInt(b));
+        }
+      }
+    }
+  }
+
+  // ===== POST-DISTRIBUTION: Upgrade Logic (Rule 3: 40→45, 80→85) =====
+  // If a seller has 40 but pool has 45 available, upgrade
+  // If a seller has 80 but pool has 85 available, upgrade
+  const upgradePairs: [string, string][] = [['40', '45'], ['80', '85']];
+  for (const result of results) {
+    for (const [from, to] of upgradePairs) {
+      const mainIdx = result.mainStationNumbers.indexOf(from);
+      if (mainIdx !== -1 && !result.mainStationNumbers.includes(to)) {
+        const allNums = [...result.mainStationNumbers, ...result.subStationResults.flatMap(sr => sr.numbers)];
+        if (!isForbidden([...allNums.filter(n => n !== from), to])) {
+          const qty = result.mainStationQuantities?.[from] || 16;
+          if (currentMainPool[to] !== undefined && currentMainPool[to] >= qty) {
+            result.mainStationNumbers[mainIdx] = to;
+            if (result.mainStationQuantities) {
+              result.mainStationQuantities[to] = qty;
+              delete result.mainStationQuantities[from];
+            }
+            currentMainPool[from] = (currentMainPool[from] || 0) + qty;
+            currentMainPool[to] -= qty;
+            result.mainStationNumbers.sort((a, b) => parseInt(a) - parseInt(b));
+          }
+        }
+      }
+    }
+  }
+
+  // ===== POST-DISTRIBUTION: Validation (Rule 14: Check trước khi chốt) =====
+  const validationWarnings = validateDistributionResults(results, history, enabledSellers.map(e => e.seller));
+  if (validationWarnings.length > 0) {
+    validationWarnings.forEach(warning => {
+      shortages.push({
+        sellerId: warning.sellerId,
+        sellerName: warning.sellerName,
+        station: 'kiểm tra',
+        needed: 0,
+        available: 0,
+        missingNumber: warning.message
+      });
+    });
+  }
+
   return { results, shortages, updatedMainPool: currentMainPool, updatedSubPools: currentSubPools };
+}
+
+// ===== Rule 14: Validate Distribution Results (Check trước khi chốt) =====
+interface ValidationWarning {
+  sellerId: string;
+  sellerName: string;
+  message: string;
+}
+
+function validateDistributionResults(
+  results: DistributionResult[],
+  history: DistributionResult[][],
+  sellers: Seller[]
+): ValidationWarning[] {
+  const warnings: ValidationWarning[] = [];
+
+  for (const result of results) {
+    const allNums = [...result.mainStationNumbers, ...result.subStationResults.flatMap(sr => sr.numbers)];
+    const seller = sellers.find(s => s.id === result.sellerId);
+
+    // 1. Check: Không rút số cấm (shouldn't have removed forbidden numbers from set)
+    // This is enforced during distribution, just verify
+
+    // 2. Check: Không trùng 2 ngày
+    const recentHistory = history.slice(0, 2)
+      .flatMap(dayResults => dayResults.filter(r => r.sellerId === result.sellerId))
+      .flatMap(r => [...r.mainStationNumbers, ...r.subStationResults.flatMap(sr => sr.numbers)]);
+    const repeatedIn2Days = allNums.filter(n => recentHistory.includes(n));
+    if (repeatedIn2Days.length > 0) {
+      warnings.push({
+        sellerId: result.sellerId,
+        sellerName: result.sellerName,
+        message: `⚠️ Trùng 2 ngày: ${repeatedIn2Days.join(', ')}`
+      });
+    }
+
+    // 3. Check: Khách lớn không trùng hàng
+    const isLargeSeller = seller && seller.targetTotalTickets > 480; // ~30 numbers
+    if (isLargeSeller) {
+      const decadeCounts: Record<number, number> = {};
+      allNums.forEach(n => {
+        const d = getDecade(n);
+        decadeCounts[d] = (decadeCounts[d] || 0) + 1;
+      });
+      const duplicateDecades = Object.entries(decadeCounts)
+        .filter(([_, count]) => count > Math.ceil(allNums.length / 10))
+        .map(([decade]) => `${decade}x`);
+      if (duplicateDecades.length > 0) {
+        warnings.push({
+          sellerId: result.sellerId,
+          sellerName: result.sellerName,
+          message: `⚠️ Khách lớn trùng hàng: ${duplicateDecades.join(', ')}`
+        });
+      }
+    }
+
+    // 4. Check: Trùng đuôi trong mức cho phép
+    const endingCounts: Record<string, number> = {};
+    allNums.forEach(n => {
+      const e = n.slice(-1);
+      endingCounts[e] = (endingCounts[e] || 0) + 1;
+    });
+    const maxEnding = isLargeSeller ? Math.max(3, Math.ceil(allNums.length / 10)) : 2;
+    const excessEndings = Object.entries(endingCounts)
+      .filter(([_, count]) => count > maxEnding)
+      .map(([ending, count]) => `đuôi ${ending}(${count})`);
+    if (excessEndings.length > 0) {
+      warnings.push({
+        sellerId: result.sellerId,
+        sellerName: result.sellerName,
+        message: `⚠️ Trùng đuôi quá mức: ${excessEndings.join(', ')}`
+      });
+    }
+
+    // 5. Check: 3x-7x đúng luật (phải có số 3x/7x backbone)
+    const has3x = allNums.some(n => getDecade(n) === 3);
+    const has7x = allNums.some(n => getDecade(n) === 7);
+    if (allNums.length >= 10 && !has3x) {
+      warnings.push({
+        sellerId: result.sellerId,
+        sellerName: result.sellerName,
+        message: `⚠️ Thiếu số hàng 3x (xương sống)`
+      });
+    }
+    if (allNums.length >= 10 && !has7x) {
+      warnings.push({
+        sellerId: result.sellerId,
+        sellerName: result.sellerName,
+        message: `⚠️ Thiếu số hàng 7x (xương sống)`
+      });
+    }
+
+    // 6. Check: Số xấu đã được chia (at least some ugly in each result with enough numbers)
+    if (allNums.length >= 10) {
+      const hasUgly = allNums.some(n => UGLY_NUMBERS.includes(n));
+      const hasBeautiful = allNums.some(n => BEAUTIFUL_NUMBERS.includes(n));
+      if (hasUgly && !hasBeautiful) {
+        warnings.push({
+          sellerId: result.sellerId,
+          sellerName: result.sellerName,
+          message: `⚠️ Có số xấu nhưng thiếu số đẹp để cân bằng`
+        });
+      }
+    }
+  }
+
+  return warnings;
 }
 
 // Helper for Rule 5: Replacement
@@ -953,13 +1202,16 @@ function findReplacement(
 
   const otherExisting = existing.filter(n => n !== targetNum);
 
-  // Base pool: Remove already used, history, forbidden, and EXTREMELY BEAUTIFUL
-  // User: "TUYẾT ĐỐI KHÔNG RÚT SỐ CỰC ĐẸP KHÔNG CÓ TRƯỜNG HỢP NÀO HẾT"
+  // Base pool: Remove already used, history, forbidden, EXTREMELY BEAUTIFUL, x0 endings, ugly numbers
+  // Rule: "25→20 sai" - cannot replace with x0 ending
+  // Rule: "TUYỆT ĐỐI KHÔNG RÚT SỐ CỰC ĐẸP"
   let safePool = pool.filter(n =>
     !existing.includes(n) &&
     !history.includes(n) &&
     !isForbidden([...otherExisting, n], setId) &&
-    !EXTREMELY_BEAUTIFUL_NUMBERS.includes(n)
+    !EXTREMELY_BEAUTIFUL_NUMBERS.includes(n) &&
+    n.slice(-1) !== '0' && // Rule: Cannot replace with x0 ending (25→20 sai)
+    !UGLY_NUMBERS.includes(n) // Don't use ugly numbers as replacements casually
   );
 
   // Apply Set 00 restrictions for Main withdrawal
@@ -969,13 +1221,13 @@ function findReplacement(
 
   if (safePool.length === 0) return null;
 
-  // Define "Restricted" pool (Beautiful 3x/7x, 9x for small sellers, x8 for non-00 sets)
+  // Define "Restricted" pool (All 3x/7x backbone, 9x for small sellers, x8 for non-00 sets)
   const isRestricted = (n: string) => {
     const decade = getDecade(n);
     const ending = n.slice(-1);
 
-    // Beautiful 3x/7x are restricted
-    if ((decade === 3 || decade === 7) && BEAUTIFUL_NUMBERS.includes(n)) return true;
+    // ALL 3x/7x numbers are backbone - restrict (not just beautiful ones)
+    if (decade === 3 || decade === 7) return true;
 
     // 9x for small sellers is restricted
     if (isSmallSeller && decade === 9) return true;
@@ -992,13 +1244,21 @@ function findReplacement(
   // Try preferred pool first, then fallback
   const searchPools = [preferredPool, fallbackPool];
 
+  // Rule: 3x/7x MUST be replaced with same decade - no fallback
+  const is3x7xTarget = targetDecade === 3 || targetDecade === 7;
+
   for (const currentPool of searchPools) {
     if (currentPool.length === 0) continue;
 
     let filteredPool = currentPool;
     if (forceSameDecade) {
       const decadePool = currentPool.filter(n => getDecade(n) === targetDecade);
-      if (decadePool.length > 0) filteredPool = decadePool;
+      if (decadePool.length > 0) {
+        filteredPool = decadePool;
+      } else if (is3x7xTarget) {
+        // 3x/7x: nếu rút → phải thay cùng hàng, không có thì bỏ qua
+        continue;
+      }
     }
 
     // New Priority System based on user's "No duplicate decade" and "Max 2 duplicate ending" rules
