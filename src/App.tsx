@@ -1416,7 +1416,7 @@ export default function App() {
                   <div className="space-y-4">
                     {(() => {
                       const filtered = sellers.filter(s => s.isEnabled && s.name.toLowerCase().includes(searchTerm.toLowerCase()));
-                      const itemsPerPage = 5;
+                      const itemsPerPage = 3;
                       return filtered.slice((distributeLeftPage - 1) * itemsPerPage, distributeLeftPage * itemsPerPage).map(seller => {
                         const isDistributed = results.some(r => r.sellerId === seller.id);
                         const result = results.find(r => r.sellerId === seller.id);
@@ -1627,7 +1627,7 @@ export default function App() {
                               <div className="space-y-2">
                                 {result?.mainStationNumbers.length > 0 && (
                                   <div className="flex flex-wrap gap-1 items-center">
-                                    <span className="text-[11px] font-bold text-white/40 uppercase mr-1">Chính:</span>
+                                    <div className="w-full text-[11px] font-bold text-white/40 uppercase mb-0.5">Chính:</div>
                                     {result?.mainStationNumbers.map(n => {
                                       const qty = result.mainStationQuantities?.[n];
                                       return (
@@ -1645,7 +1645,7 @@ export default function App() {
                                   <div className="flex flex-col gap-1">
                                     {result?.subStationResults.map(sr => sr.numbers.length > 0 && (
                                       <div key={sr.id} className="flex flex-wrap gap-1 items-center">
-                                        <span className="text-[11px] font-bold text-white/40 uppercase mr-1 min-w-[50px]">{sr.name}:</span>
+                                        <div className="w-full text-[11px] font-bold text-white/40 uppercase mb-0.5">{sr.name}:</div>
                                         {sr.numbers.map(n => {
                                           const qty = sr.quantities?.[n];
                                           return (
@@ -1670,7 +1670,7 @@ export default function App() {
                   })()}
                     {(() => {
                       const filteredSellers = sellers.filter(s => s.isEnabled && s.name.toLowerCase().includes(searchTerm.toLowerCase()));
-                      const itemsPerPage = 5;
+                      const itemsPerPage = 3;
                       const totalPages = Math.ceil(filteredSellers.length / itemsPerPage) || 1;
                       if (totalPages <= 1) return null;
                       return (
@@ -1842,7 +1842,7 @@ export default function App() {
                     
                     <div className="space-y-4">
                       {(() => {
-                        const itemsPerPage = 5;
+                        const itemsPerPage = 3;
                         const paginatedResults = results.slice((distributeRightPage - 1) * itemsPerPage, distributeRightPage * itemsPerPage);
                         return paginatedResults.map((res, idx) => (
                         <motion.div 
@@ -1925,7 +1925,7 @@ export default function App() {
                       ));
                     })()}
                     {(() => {
-                      const itemsPerPage = 5;
+                      const itemsPerPage = 3;
                       const totalPages = Math.ceil(results.length / itemsPerPage) || 1;
                       if (totalPages <= 1) return null;
                       return (
