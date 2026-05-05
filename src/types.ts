@@ -16,6 +16,8 @@ export interface Seller {
   setType: 'single' | 'double';
   sheetsOption: '16' | '32' | 'custom';
   customSheets?: number;
+  extraSheetsOption?: '16' | '32' | 'custom'; // For "góc" (extra numbers)
+  extraCustomSheets?: number;
   targetTotalTickets: number;
   targetSubTickets?: number; // If set, targetTotalTickets becomes targetMainTickets
   customRatio?: number; // 0-100, if set overrides global ratio in auto mode
@@ -28,6 +30,8 @@ export interface Seller {
   subStationRatios: Record<string, number>; // sub-station ID -> percentage (0-100)
   fixedSetId?: string; // If set, always uses this set
   customPreferences?: CustomPreference[]; // Specific numbers and quantities
+  saturdayTickets?: number; // Base tickets for Saturday
+  saturdayBonus?: number; // Bonus tickets for Saturday
 }
 
 export interface StationName {

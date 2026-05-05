@@ -120,6 +120,14 @@ export default function App() {
   const [searchNumber, setSearchNumber] = useState('');
   const [adjustAmount, setAdjustAmount] = useState<number>(1);
 
+  const getTargetTickets = useCallback((seller: Seller) => {
+    const isSaturday = new Date(dailyInput.date).getDay() === 6;
+    if (isSaturday) {
+      return (seller.saturdayTickets ?? seller.targetTotalTickets) + (seller.saturdayBonus || 0);
+    }
+    return seller.targetTotalTickets;
+  }, [dailyInput.date]);
+
   const addTicketsToInventory = (station: string, number: string, quantity: number) => {
     setDailyInput(prev => {
       if (station === 'main' || station === 'ưu tiên') {
@@ -242,8 +250,9 @@ export default function App() {
       });
       const totalAllPool = totalMainPool + Object.values(totalSubPools).reduce((a, b) => a + b, 0);
       const globalRatio = totalAllPool > 0 ? totalMainPool / totalAllPool : 0.7;
-      const mainQty = seller.mainEnabled ? Math.round(seller.targetTotalTickets * globalRatio) : 0;
-      const remainingSub = seller.targetTotalTickets - mainQty;
+      const sellerTarget = getTargetTickets(seller);
+      const mainQty = seller.mainEnabled ? Math.round(sellerTarget * globalRatio) : 0;
+      const remainingSub = sellerTarget - mainQty;
       const totalSubPoolSum = Object.values(totalSubPools).reduce((a, b) => a + b, 0);
       
       const subResults = dailyInput.subStations
@@ -267,7 +276,7 @@ export default function App() {
         mainStationNumbers: [],
         mainStationQuantities: mainQty > 0 ? { "Dự kiến": mainQty } : {},
         subStationResults: subResults,
-        totalSheets: seller.targetTotalTickets
+        totalSheets: getTargetTickets(seller)
       };
     });
   };
@@ -683,9 +692,12 @@ export default function App() {
     setIsProcessing(true);
     
     // Determine which sellers to process
-    const targetSellers = sellerId 
+    const targetSellers = (sellerId 
       ? sellers.filter(s => s.id === sellerId)
-      : sellers.filter(s => s.isEnabled);
+      : sellers.filter(s => s.isEnabled)).map(s => ({
+        ...s,
+        targetTotalTickets: getTargetTickets(s)
+      }));
 
     // Use current pools if distributing individually, otherwise use initial input
     const initialMain = sellerId ? currentPools.main : dailyInput.mainStationTickets;
@@ -1175,46 +1187,16 @@ export default function App() {
                     <div className="bg-[#13131A] p-4 rounded-xl border border-white/5">
                       <div className="text-[10px] font-bold text-white/40 uppercase mb-2">Tổng vé yêu cầu (Khách)</div>
                       <div className="text-2xl font-black text-indigo-400 mb-2">
-                        {sellers.filter(s => s.isEnabled).reduce((acc, s) => acc + s.targetTotalTickets, 0)} <span className="text-sm font-bold text-white/30">tờ</span>
+                        {sellers.filter(s => s.isEnabled).reduce((acc, s) => acc + getTargetTickets(s), 0)} <span className="text-sm font-bold text-white/30">tờ</span>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <input type="number" id="sellerScalePct" className="w-14 bg-white/5 border border-white/10 rounded-lg py-1 px-2 text-[11px] text-white outline-none" placeholder="%" />
-                        <button onClick={() => {
-                          const pct = parseInt((document.getElementById('sellerScalePct') as HTMLInputElement).value) || 0;
-                          if (pct > 0 && confirm(`Tăng lượng vé yêu cầu của tất cả khách lên ${pct}%?`)) {
-                            setSellers(prev => prev.map(s => ({
-                              ...s,
-                              targetTotalTickets: Math.ceil(s.targetTotalTickets * (1 + pct / 100))
-                            })));
-                          }
-                        }} className="px-2 py-1 bg-indigo-500/10 text-indigo-400 text-[10px] font-bold rounded-lg hover:bg-indigo-500/20 transition-all">+ Tăng %</button>
-                      </div>
+
                     </div>
                     <div className="bg-[#13131A] p-4 rounded-xl border border-white/5">
                       <div className="text-[10px] font-bold text-white/40 uppercase mb-2">Tổng vé hiện có (Kho)</div>
-                      <div className={`text-2xl font-black mb-2 ${((Object.values(dailyInput.mainStationTickets) as number[]).reduce((a, b) => a + b, 0) + dailyInput.subStations.reduce((acc, sub) => acc + (Object.values(sub.tickets) as number[]).reduce((a, b) => a + b, 0), 0)) >= sellers.filter(s => s.isEnabled).reduce((acc, s) => acc + s.targetTotalTickets, 0) ? 'text-emerald-400' : 'text-rose-400'}`}>
+                      <div className={`text-2xl font-black mb-2 ${((Object.values(dailyInput.mainStationTickets) as number[]).reduce((a, b) => a + b, 0) + dailyInput.subStations.reduce((acc, sub) => acc + (Object.values(sub.tickets) as number[]).reduce((a, b) => a + b, 0), 0)) >= sellers.filter(s => s.isEnabled).reduce((acc, s) => acc + getTargetTickets(s), 0) ? 'text-emerald-400' : 'text-rose-400'}`}>
                         {((Object.values(dailyInput.mainStationTickets) as number[]).reduce((a, b) => a + b, 0) + dailyInput.subStations.reduce((acc, sub) => acc + (Object.values(sub.tickets) as number[]).reduce((a, b) => a + b, 0), 0))} <span className="text-sm font-bold text-white/30">tờ</span>
                       </div>
-                      <div className="flex items-center gap-2">
-                        <input type="number" id="inventoryScalePct" className="w-14 bg-white/5 border border-white/10 rounded-lg py-1 px-2 text-[11px] text-white outline-none" placeholder="%" />
-                        <button onClick={() => {
-                          const pct = parseInt((document.getElementById('inventoryScalePct') as HTMLInputElement).value) || 0;
-                          if (pct > 0 && confirm(`Tăng lượng vé trong kho lên ${pct}%?`)) {
-                            setDailyInput(prev => {
-                              const newState = JSON.parse(JSON.stringify(prev));
-                              Object.keys(newState.mainStationTickets).forEach(k => {
-                                newState.mainStationTickets[k] = Math.ceil(newState.mainStationTickets[k] * (1 + pct / 100));
-                              });
-                              newState.subStations.forEach((sub: any) => {
-                                Object.keys(sub.tickets).forEach(k => {
-                                  sub.tickets[k] = Math.ceil(sub.tickets[k] * (1 + pct / 100));
-                                });
-                              });
-                              return newState;
-                            });
-                          }
-                        }} className="px-2 py-1 bg-emerald-500/10 text-emerald-400 text-[10px] font-bold rounded-lg hover:bg-emerald-500/20 transition-all">+ Tăng %</button>
-                      </div>
+
                     </div>
                   </div>
 
@@ -1416,7 +1398,7 @@ export default function App() {
                   <div className="space-y-4">
                     {(() => {
                       const filtered = sellers.filter(s => s.isEnabled && s.name.toLowerCase().includes(searchTerm.toLowerCase()));
-                      const itemsPerPage = 3;
+                      const itemsPerPage = 5;
                       return filtered.slice((distributeLeftPage - 1) * itemsPerPage, distributeLeftPage * itemsPerPage).map(seller => {
                         const isDistributed = results.some(r => r.sellerId === seller.id);
                         const result = results.find(r => r.sellerId === seller.id);
@@ -1556,20 +1538,59 @@ export default function App() {
                                     </button>
                                   </div>
                                 </div>
-                                <div>
-                                  <label className="text-[10px] font-bold text-white/40 uppercase mb-1 block">
-                                    {seller.allocationMode === 'manual' ? 'Vé Đài Chính' : 'Tổng Vé Lấy'}
-                                  </label>
-                                  <div className="flex items-center gap-2">
-                                    <input 
-                                      type="number" 
-                                      value={seller.targetTotalTickets}
-                                      onChange={(e) => updateSeller(seller.id, { targetTotalTickets: parseInt(e.target.value) || 0 })}
-                                      className="w-full bg-[#13131A] border border-white/5 rounded-xl text-xs font-bold text-white/80 py-2 px-3 focus:border-indigo-500 outline-none"
-                                    />
-                                    <span className="text-[10px] font-bold text-white/40 uppercase">Tờ</span>
+                                {new Date(dailyInput.date).getDay() === 6 ? (
+                                  <div className="flex flex-col gap-2">
+                                    <div>
+                                      <label className="text-[10px] font-bold text-amber-400/60 uppercase mb-1 flex items-center gap-1">
+                                        <Star size={10} /> Lương Thứ 7
+                                      </label>
+                                      <div className="flex items-center gap-2">
+                                        <input 
+                                          type="number" 
+                                          value={seller.saturdayTickets ?? seller.targetTotalTickets}
+                                          onChange={(e) => updateSeller(seller.id, { saturdayTickets: parseInt(e.target.value) || 0 })}
+                                          className="w-full bg-amber-500/5 border border-amber-500/20 rounded-xl text-xs font-bold text-amber-400 py-2 px-3 focus:border-amber-500 outline-none"
+                                        />
+                                        <span className="text-xs font-bold text-amber-400/40">tờ</span>
+                                      </div>
+                                    </div>
+                                    <div>
+                                      <label className="text-[10px] font-bold text-emerald-400/60 uppercase mb-1 flex items-center gap-1">
+                                        <Plus size={10} /> Chỉ định tăng
+                                      </label>
+                                      <div className="flex items-center gap-2">
+                                        <input 
+                                          type="number" 
+                                          value={seller.saturdayBonus || ''}
+                                          placeholder="+0"
+                                          onChange={(e) => updateSeller(seller.id, { saturdayBonus: parseInt(e.target.value) || 0 })}
+                                          className="w-full bg-emerald-500/5 border border-emerald-500/20 rounded-xl text-xs font-bold text-emerald-400 py-2 px-3 focus:border-emerald-500 outline-none placeholder:text-emerald-500/30"
+                                        />
+                                        <span className="text-xs font-bold text-emerald-400/40">tờ</span>
+                                      </div>
+                                    </div>
+                                    <div className="text-[10px] text-white/40 mt-1">
+                                      Tổng cộng: <span className="font-bold text-white">{getTargetTickets(seller)}</span> tờ
+                                    </div>
                                   </div>
-                                </div>
+                                ) : (
+                                  <div>
+                                    <label className="text-[10px] font-bold text-white/40 uppercase mb-1 block">
+                                      {seller.allocationMode === 'manual' ? 'Vé Đài Chính' : 'Tổng Vé Lấy'}
+                                    </label>
+                                    <div className="flex items-center gap-2">
+                                      <input 
+                                        type="number" 
+                                        value={seller.targetTotalTickets}
+                                        onChange={(e) => updateSeller(seller.id, { targetTotalTickets: parseInt(e.target.value) || 0 })}
+                                        className="w-full bg-[#13131A] border border-white/5 rounded-xl text-xs font-bold text-white/80 py-2 px-3 focus:border-indigo-500 outline-none"
+                                        min="0"
+                                        step="1"
+                                      />
+                                      <span className="text-xs font-bold text-white/40">tờ</span>
+                                    </div>
+                                  </div>
+                                )}
                                 {seller.allocationMode === 'auto' && seller.mainEnabled && (
                                   <div className="space-y-3">
                                     <div>
@@ -1670,7 +1691,7 @@ export default function App() {
                   })()}
                     {(() => {
                       const filteredSellers = sellers.filter(s => s.isEnabled && s.name.toLowerCase().includes(searchTerm.toLowerCase()));
-                      const itemsPerPage = 3;
+                      const itemsPerPage = 5;
                       const totalPages = Math.ceil(filteredSellers.length / itemsPerPage) || 1;
                       if (totalPages <= 1) return null;
                       return (
@@ -1842,7 +1863,7 @@ export default function App() {
                     
                     <div className="space-y-4">
                       {(() => {
-                        const itemsPerPage = 3;
+                        const itemsPerPage = 5;
                         const paginatedResults = results.slice((distributeRightPage - 1) * itemsPerPage, distributeRightPage * itemsPerPage);
                         return paginatedResults.map((res, idx) => (
                         <motion.div 
@@ -1884,16 +1905,16 @@ export default function App() {
                               <div className="flex flex-wrap gap-1.5">
                                 {res.mainStationNumbers.map(n => {
                                   const qty = res.mainStationQuantities?.[n];
-                                  return (
-                                    <div key={n} className="flex flex-col items-center gap-1">
-                                      <span className="w-8 h-8 flex items-center justify-center bg-[#1A1A24] border border-white/10 rounded-lg font-bold text-[13px] text-white/80 shadow-lg shadow-black/10">
-                                        {n}
-                                      </span>
-                                      {qty && qty !== (sellers.find(s => s.id === res.sellerId)?.sheetsOption === '32' ? 32 : (sellers.find(s => s.id === res.sellerId)?.sheetsOption === 'custom' ? (sellers.find(s => s.id === res.sellerId)?.customSheets || 16) : 16)) && (
-                                        <span className="text-[10px] font-black text-rose-400">{qty} tờ</span>
-                                      )}
-                                    </div>
-                                  );
+                                    return (
+                                      <div key={n} className="flex flex-col items-center justify-center bg-[#1A1A24] border border-white/10 rounded-lg py-1 min-w-[36px] shadow-lg shadow-black/10 gap-0.5">
+                                        <span className="font-bold text-[13px] text-white/80 leading-none mt-0.5">
+                                          {n}
+                                        </span>
+                                        {qty && (
+                                          <span className="text-[10px] font-black text-emerald-400 leading-none mb-0.5">{qty}</span>
+                                        )}
+                                      </div>
+                                    );
                                 })}
                               </div>
                             </div>
@@ -1907,12 +1928,12 @@ export default function App() {
                                   {subRes.numbers.map(n => {
                                     const qty = subRes.quantities?.[n];
                                     return (
-                                      <div key={n} className="flex flex-col items-center gap-1">
-                                        <span className="w-8 h-8 flex items-center justify-center bg-indigo-500/10 border border-indigo-500/20 rounded-lg font-bold text-[13px] text-indigo-400 shadow-lg shadow-black/10">
+                                      <div key={n} className="flex flex-col items-center justify-center bg-indigo-500/10 border border-indigo-500/20 rounded-lg py-1 min-w-[36px] shadow-lg shadow-black/10 gap-0.5">
+                                        <span className="font-bold text-[13px] text-indigo-400 leading-none mt-0.5">
                                           {n}
                                         </span>
-                                        {qty && qty !== (sellers.find(s => s.id === res.sellerId)?.sheetsOption === '32' ? 32 : (sellers.find(s => s.id === res.sellerId)?.sheetsOption === 'custom' ? (sellers.find(s => s.id === res.sellerId)?.customSheets || 16) : 16)) && (
-                                          <span className="text-[10px] font-black text-rose-400">{qty} tờ</span>
+                                        {qty && (
+                                          <span className="text-[10px] font-black text-emerald-400 leading-none mb-0.5">{qty}</span>
                                         )}
                                       </div>
                                     );
@@ -1925,7 +1946,7 @@ export default function App() {
                       ));
                     })()}
                     {(() => {
-                      const itemsPerPage = 3;
+                      const itemsPerPage = 5;
                       const totalPages = Math.ceil(results.length / itemsPerPage) || 1;
                       if (totalPages <= 1) return null;
                       return (
@@ -2084,7 +2105,7 @@ export default function App() {
                   </div>
                   <div className="flex items-baseline gap-2">
                     <span className="text-3xl font-black text-white/90">
-                      {sellers.filter(s => s.isEnabled).reduce((acc, s) => acc + (s.targetTotalTickets || 0), 0).toLocaleString()}
+                      {sellers.filter(s => s.isEnabled).reduce((acc, s) => acc + getTargetTickets(s), 0).toLocaleString()}
                     </span>
                     <span className="text-xs font-bold text-indigo-400">tờ</span>
                   </div>
@@ -2105,7 +2126,7 @@ export default function App() {
                   <div className="flex items-baseline gap-2">
                     <span className="text-3xl font-black text-white/90">
                       {(() => {
-                        const totalTicketsReserved = sellers.filter(s => s.isEnabled).reduce((acc, s) => acc + (s.targetTotalTickets || 0), 0);
+                        const totalTicketsReserved = sellers.filter(s => s.isEnabled).reduce((acc, s) => acc + getTargetTickets(s), 0);
                         const totalMain = Object.values(dailyInput.mainStationTickets).reduce((a, b) => a + b, 0) as number;
                         const totalInventory = totalMain + dailyInput.subStations.reduce((acc, sub) => acc + (Object.values(sub.tickets || {}) as number[]).reduce((a, b) => a + b, 0), 0);
                         return totalInventory > 0 ? ((totalTicketsReserved / totalInventory) * 100).toFixed(1) : '0.0';
@@ -2115,7 +2136,7 @@ export default function App() {
                   </div>
                   <div className="mt-4 h-1 w-full bg-white/5 rounded-full overflow-hidden">
                     <div className="h-full bg-amber-500 rounded-full" style={{ width: `${(() => {
-                        const totalTicketsReserved = sellers.filter(s => s.isEnabled).reduce((acc, s) => acc + (s.targetTotalTickets || 0), 0);
+                        const totalTicketsReserved = sellers.filter(s => s.isEnabled).reduce((acc, s) => acc + getTargetTickets(s), 0);
                         const totalMain = Object.values(dailyInput.mainStationTickets).reduce((a, b) => a + b, 0) as number;
                         const totalInventory = totalMain + dailyInput.subStations.reduce((acc, sub) => acc + (Object.values(sub.tickets || {}) as number[]).reduce((a, b) => a + b, 0), 0);
                         return totalInventory > 0 ? Math.min(100, (totalTicketsReserved / totalInventory) * 100) : 0;
@@ -2893,6 +2914,44 @@ export default function App() {
                               Bộ {set.id}
                             </button>
                           ))}
+                        </div>
+                      </section>
+
+                      {/* Extra Sheets Option */}
+                      <section>
+                        <div className="flex items-center gap-2 mb-4">
+                          <Layers size={18} className="text-indigo-400" />
+                          <h4 className="font-bold text-white/90">Cấu hình Số Tờ cho Vé Lẻ (Góc)</h4>
+                        </div>
+                        <p className="text-xs text-white/40 mb-3">
+                          Nếu khách hàng lấy Bộ (Case) 16 tờ nhưng các số lẻ (Góc) chia thêm lại là 32 tờ (hoặc ngược lại), bạn có thể cấu hình ở đây.
+                        </p>
+                        <div className="flex gap-4 items-end">
+                          <div className="flex-1">
+                            <label className="text-[10px] font-bold text-white/40 uppercase mb-2 block">Số tờ / Số lẻ (Góc)</label>
+                            <select 
+                              value={seller.extraSheetsOption || ''}
+                              onChange={(e) => updateSeller(seller.id, { extraSheetsOption: e.target.value as any || undefined })}
+                              className="w-full bg-[#13131A] border border-white/5 rounded-xl text-sm font-bold text-white/80 py-3 px-4 focus:border-indigo-500 outline-none"
+                            >
+                              <option value="">Giống với Bộ (Mặc định)</option>
+                              <option value="16">16 tờ / số</option>
+                              <option value="32">32 tờ / số</option>
+                              <option value="custom">Tùy chỉnh</option>
+                            </select>
+                          </div>
+                          {seller.extraSheetsOption === 'custom' && (
+                            <div className="flex-1">
+                              <label className="text-[10px] font-bold text-white/40 uppercase mb-2 block">Nhập số tờ</label>
+                              <input 
+                                type="number" 
+                                value={seller.extraCustomSheets || ''}
+                                onChange={(e) => updateSeller(seller.id, { extraCustomSheets: parseInt(e.target.value) || 0 })}
+                                className="w-full bg-[#13131A] border border-white/5 rounded-xl text-sm font-bold text-white/80 py-3 px-4 focus:border-indigo-500 outline-none"
+                                placeholder="VD: 24"
+                              />
+                            </div>
+                          )}
                         </div>
                       </section>
 
