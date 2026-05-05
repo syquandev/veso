@@ -1863,7 +1863,7 @@ export default function App() {
                     
                     <div className="space-y-4">
                       {(() => {
-                        const itemsPerPage = 7;
+                        const itemsPerPage = 5;
                         const paginatedResults = results.slice((distributeRightPage - 1) * itemsPerPage, distributeRightPage * itemsPerPage);
                         return paginatedResults.map((res, idx) => (
                         <motion.div 
@@ -1946,7 +1946,7 @@ export default function App() {
                       ));
                     })()}
                     {(() => {
-                      const itemsPerPage = 7;
+                      const itemsPerPage = 5;
                       const totalPages = Math.ceil(results.length / itemsPerPage) || 1;
                       if (totalPages <= 1) return null;
                       return (
