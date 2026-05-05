@@ -1398,7 +1398,7 @@ export default function App() {
                   <div className="space-y-4">
                     {(() => {
                       const filtered = sellers.filter(s => s.isEnabled && s.name.toLowerCase().includes(searchTerm.toLowerCase()));
-                      const itemsPerPage = 7;
+                      const itemsPerPage = 9;
                       return filtered.slice((distributeLeftPage - 1) * itemsPerPage, distributeLeftPage * itemsPerPage).map(seller => {
                         const isDistributed = results.some(r => r.sellerId === seller.id);
                         const result = results.find(r => r.sellerId === seller.id);
@@ -1691,7 +1691,7 @@ export default function App() {
                   })()}
                     {(() => {
                       const filteredSellers = sellers.filter(s => s.isEnabled && s.name.toLowerCase().includes(searchTerm.toLowerCase()));
-                      const itemsPerPage = 7;
+                      const itemsPerPage = 9;
                       const totalPages = Math.ceil(filteredSellers.length / itemsPerPage) || 1;
                       if (totalPages <= 1) return null;
                       return (
@@ -2090,7 +2090,7 @@ export default function App() {
                   </div>
                   <div className="flex items-baseline gap-2">
                     <span className="text-3xl font-black text-white/90">{sellers.length}</span>
-                    <span className="text-xs font-bold text-emerald-400">+{sellers.filter(s => s.isEnabled).length} active</span>
+                    <span className="text-xs font-bold text-emerald-400">+{sellers.filter(s => s.isEnabled).length} hoạt động</span>
                   </div>
                   <div className="mt-4 h-1 w-full bg-white/5 rounded-full overflow-hidden">
                     <div className="h-full bg-indigo-500 rounded-full" style={{ width: `${(sellers.filter(s => s.isEnabled).length / Math.max(1, sellers.length)) * 100}%` }} />
