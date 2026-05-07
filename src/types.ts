@@ -14,9 +14,9 @@ export interface Seller {
   id: string;
   name: string;
   setType: 'single' | 'double';
-  sheetsOption: '16' | '32' | 'custom';
+  sheetsOption: '16' | '32' | '160' | 'custom';
   customSheets?: number;
-  extraSheetsOption?: '16' | '32' | 'custom'; // For "góc" (extra numbers)
+  extraSheetsOption?: '16' | '32' | '160' | 'custom'; // For "góc" (extra numbers)
   extraCustomSheets?: number;
   targetTotalTickets: number;
   targetSubTickets?: number; // If set, targetTotalTickets becomes targetMainTickets

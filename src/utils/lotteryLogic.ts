@@ -190,6 +190,7 @@ export function distributeTickets(
     // Calculate sheets per number
     let sheetsPerNumber = 16;
     if (seller.sheetsOption === '32') sheetsPerNumber = 32;
+    else if (seller.sheetsOption === '160') sheetsPerNumber = 160;
     else if (seller.sheetsOption === 'custom') sheetsPerNumber = seller.customSheets || 16;
 
     // 1. Process Custom Preferences First

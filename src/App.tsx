@@ -1518,6 +1518,7 @@ export default function App() {
                                   >
                                     <option value="16">16 tờ/số</option>
                                     <option value="32">32 tờ/số</option>
+                                    <option value="160">160 tờ/số</option>
                                     <option value="custom">Tùy chỉnh</option>
                                   </select>
                                 </div>
@@ -2260,6 +2261,7 @@ export default function App() {
                           >
                             <option value="16">Cố định 16</option>
                             <option value="32">Cố định 32</option>
+                            <option value="160">Cố định 160</option>
                             <option value="custom">Tuỳ chọn</option>
                           </select>
                           {seller.sheetsOption === 'custom' && (
@@ -2937,6 +2939,7 @@ export default function App() {
                               <option value="">Giống với Bộ (Mặc định)</option>
                               <option value="16">16 tờ / số</option>
                               <option value="32">32 tờ / số</option>
+                              <option value="160">160 tờ / số</option>
                               <option value="custom">Tùy chỉnh</option>
                             </select>
                           </div>
