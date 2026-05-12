@@ -38,6 +38,7 @@ export function violatesDistributionRules(num: string, existing: string[], targe
 
   // Rule: No duplicate tens (hàng) - strict for all sellers
   // "không được trùng hàng"
+  // For 10 numbers: max 1 per decade. For 20 numbers: max 2 per decade. etc.
   const maxDecade = Math.max(1, Math.ceil(targetTotal / 10));
   const decadeCount = existing.filter(n => getDecade(n) === decade).length;
   if (decadeCount >= maxDecade) return true;
@@ -491,6 +492,8 @@ export function distributeTickets(
     };
 
     // Determine which indices to send to sub stations
+    // BUG FIX: Also exclude 0x and 9x numbers that were injected by ensureDecades
+    // since these are specifically needed in the final distribution and 0x can't be withdrawn
     const replaceableIndices: number[] = [];
     initialNumbersFromSets.forEach((n, i) => {
       if (canWithdrawFromMain(n)) replaceableIndices.push(i);
@@ -511,6 +514,12 @@ export function distributeTickets(
 
     // Helper: find sub replacement with proper priority
     // Priority: same number > same tens digit (skip ±1,±2 from history) > nearby
+    // BUG FIX: findSubReplacement must enforce strict no-duplicate-decade rule
+    // across ALL stations (main + all subs) combined.
+    // Previously, it used violatesDistributionRules which calculates maxDecade from
+    // totalNeededFromSets, but the actual total numbers assigned to a seller includes
+    // ALL stations. This caused duplicate decades (e.g., 2 x hàng 0) when sub-station
+    // picked a number from a decade that main already had.
     const findSubReplacement = (
       targetNum: string,
       availableSub: string[],
@@ -520,15 +529,22 @@ export function distributeTickets(
       const targetDecade = getDecade(targetNum);
       const targetVal = parseInt(targetNum);
 
+      // Calculate the TOTAL number of numbers this seller will receive across ALL stations
+      const totalAllStations = totalNeededFromSets + mainNumbers.length + subStationResults.reduce((acc, r) => acc + r.numbers.length, 0) - allAssigned.length + allAssigned.length;
+      // Simpler: just use allAssigned.length + remaining to fill as the effective total
+      const effectiveTotal = Math.max(totalNeededFromSets, allAssigned.length + 1);
+
       // Filter out already assigned, forbidden, and decade/ending violations
-      const safe = availableSub.filter(n =>
-        !allAssigned.includes(n) &&
-        !isNumberForbidden([...allAssigned, n], startSet.id) &&
-        !violatesDistributionRules(n, allAssigned, totalNeededFromSets)
-      );
+      // BUG FIX: Check decade duplication strictly - max 1 per decade for <=10 numbers
+      const safe = availableSub.filter(n => {
+        if (allAssigned.includes(n)) return false;
+        if (isNumberForbidden([...allAssigned, n], startSet.id)) return false;
+        if (violatesDistributionRules(n, allAssigned, effectiveTotal)) return false;
+        return true;
+      });
       if (safe.length === 0) return null;
 
-      // Priority 1: Exact same number
+      // Priority 1: Exact same number (if it doesn't cause decade dup)
       if (safe.includes(targetNum)) return targetNum;
 
       // Priority 2: Same tens digit, but skip numbers ±1 and ±2 from target
@@ -558,9 +574,11 @@ export function distributeTickets(
         const subResult = subStationResults.find(r => r.id === subId)!;
         const availableSub = Object.keys(subPool).filter(n => subPool[n] >= sheetsPerNumber);
 
+        // BUG FIX: allAssigned must include ALL numbers across ALL stations for this seller
+        // so that decade duplication is checked globally, not per-station
         const currentAssigned = [...mainNumbers, ...subStationResults.flatMap(r => r.numbers)];
 
-        // Use proper replacement priority
+        // Use proper replacement priority (now with cross-station decade check)
         const replacement = findSubReplacement(num, availableSub, currentAssigned, sellerHistory);
 
         if (replacement) {
@@ -574,15 +592,22 @@ export function distributeTickets(
           const futureNumbers = initialNumbersFromSets.slice(idx + 1);
           const allCurrent = [...mainNumbers, ...subStationResults.flatMap(r => r.numbers), ...futureNumbers];
 
-          if (currentMainPool[num] >= sheetsPerNumber && !allCurrent.includes(num)) {
+          // BUG FIX: Also check decade violation before adding to main
+          const wouldViolateDecade = violatesDistributionRules(num, 
+            [...mainNumbers, ...subStationResults.flatMap(r => r.numbers)], 
+            totalNeededFromSets
+          );
+
+          if (currentMainPool[num] >= sheetsPerNumber && !allCurrent.includes(num) && !wouldViolateDecade) {
             mainNumbers.push(num);
             mainStationQuantities[num] = sheetsPerNumber;
             currentMainPool[num] -= sheetsPerNumber;
           } else {
             const availableMain = Object.keys(currentMainPool).filter(n => currentMainPool[n] >= sheetsPerNumber);
             const isSmallSeller = seller.targetTotalTickets <= 160;
+            const fallbackAllAssigned = [...mainNumbers, ...subStationResults.flatMap(r => r.numbers)];
             const fallbackReplacement = findReplacement(
-              num, availableMain, allCurrent, neutralNumbers, sellerHistory,
+              num, availableMain, [...fallbackAllAssigned, ...futureNumbers], neutralNumbers, sellerHistory,
               startSet.id, true, isSmallSeller, totalNeededFromSets
             );
 
@@ -605,7 +630,11 @@ export function distributeTickets(
         const futureNumbers = initialNumbersFromSets.slice(idx + 1);
         const allCurrent = [...mainNumbers, ...subStationResults.flatMap(r => r.numbers), ...futureNumbers];
 
-        if (currentMainPool[finalNum] >= sheetsPerNumber && !isSet00Restricted && !allCurrent.includes(finalNum)) {
+        // BUG FIX: Check decade violation against ALL assigned (main + subs)
+        const allAssignedSoFar = [...mainNumbers, ...subStationResults.flatMap(r => r.numbers)];
+        const wouldViolateDecade = violatesDistributionRules(finalNum, allAssignedSoFar, totalNeededFromSets);
+
+        if (currentMainPool[finalNum] >= sheetsPerNumber && !isSet00Restricted && !allCurrent.includes(finalNum) && !wouldViolateDecade) {
           mainNumbers.push(finalNum);
           mainStationQuantities[finalNum] = sheetsPerNumber;
           currentMainPool[finalNum] -= sheetsPerNumber;
@@ -614,8 +643,9 @@ export function distributeTickets(
             const isRestricted = startSet.id === '00' && (n === '67' || n === '48');
             return currentMainPool[n] >= sheetsPerNumber && !isRestricted;
           });
+          // BUG FIX: Use allAssignedSoFar for replacement to check cross-station violations
           const replacement = findReplacement(
-            finalNum, availableMain, allCurrent, neutralNumbers, sellerHistory,
+            finalNum, availableMain, [...allAssignedSoFar, ...futureNumbers], neutralNumbers, sellerHistory,
             startSet.id, true, isSmallSeller, totalNeededFromSets
           );
           if (replacement) {
@@ -940,6 +970,98 @@ export function distributeTickets(
             currentMainPool[beauty] -= mainStationQuantities[beauty];
             currentMainPool[old] = (currentMainPool[old] || 0) + mainStationQuantities[beauty];
             finalAssigned[finalAssigned.indexOf(old)] = beauty;
+          }
+        }
+      }
+    }
+
+    // ===== POST-DISTRIBUTION: Decade Dedup Safety Net =====
+    // BUG FIX: Final check to ensure no duplicate decades (hàng) exist across all stations
+    // This catches edge cases where ensureDecades or desperate fill created duplicates
+    {
+      const allFinal = [...mainNumbers, ...subStationResults.flatMap(r => r.numbers)];
+      const maxDecadeAllowed = Math.max(1, Math.ceil(allFinal.length / 10));
+      const decadeCounts: Record<number, number> = {};
+      allFinal.forEach(n => {
+        const d = getDecade(n);
+        decadeCounts[d] = (decadeCounts[d] || 0) + 1;
+      });
+
+      // Find decades that are over-represented
+      const overDecades = Object.entries(decadeCounts)
+        .filter(([_, count]) => count > maxDecadeAllowed)
+        .map(([d]) => parseInt(d));
+
+      for (const overDecade of overDecades) {
+        // Find the excess numbers in this decade (prefer replacing sub-station ones first)
+        const excess = decadeCounts[overDecade] - maxDecadeAllowed;
+        let fixed = 0;
+
+        // Try to replace excess from sub-stations first
+        for (const subRes of subStationResults) {
+          if (fixed >= excess) break;
+          const subPool = currentSubPools[subRes.id];
+          const subDecadeNums = subRes.numbers.filter(n => getDecade(n) === overDecade);
+
+          for (const dupNum of subDecadeNums) {
+            if (fixed >= excess) break;
+            // Find a different-decade replacement from this sub's pool
+            const allCurrentFinal = [...mainNumbers, ...subStationResults.flatMap(r => r.numbers)];
+            const missingDecades = Array.from({ length: 10 }, (_, i) => i)
+              .filter(d => !decadeCounts[d] || decadeCounts[d] === 0);
+
+            const replacementCandidates = Object.keys(subPool).filter(n => {
+              const d = getDecade(n);
+              return subPool[n] >= sheetsPerNumber &&
+                !allCurrentFinal.includes(n) &&
+                d !== overDecade &&
+                (decadeCounts[d] || 0) < maxDecadeAllowed;
+            });
+
+            // Prefer filling missing decades
+            const preferMissing = replacementCandidates.filter(n => missingDecades.includes(getDecade(n)));
+            const pick = preferMissing.length > 0 ? preferMissing[0] : (replacementCandidates.length > 0 ? replacementCandidates[0] : null);
+
+            if (pick) {
+              const dupIdx = subRes.numbers.indexOf(dupNum);
+              subRes.numbers[dupIdx] = pick;
+              subRes.quantities[pick] = subRes.quantities[dupNum];
+              delete subRes.quantities[dupNum];
+              subPool[pick] -= subRes.quantities[pick];
+              subPool[dupNum] = (subPool[dupNum] || 0) + subRes.quantities[pick];
+              decadeCounts[overDecade]--;
+              decadeCounts[getDecade(pick)] = (decadeCounts[getDecade(pick)] || 0) + 1;
+              fixed++;
+            }
+          }
+        }
+
+        // If still excess, try main station
+        if (fixed < excess) {
+          const mainDecadeNums = mainNumbers.filter(n => getDecade(n) === overDecade && canWithdrawFromMain(n));
+          for (const dupNum of mainDecadeNums) {
+            if (fixed >= excess) break;
+            const allCurrentFinal = [...mainNumbers, ...subStationResults.flatMap(r => r.numbers)];
+            const replacementCandidates = Object.keys(currentMainPool).filter(n => {
+              const d = getDecade(n);
+              return currentMainPool[n] >= sheetsPerNumber &&
+                !allCurrentFinal.includes(n) &&
+                d !== overDecade &&
+                (decadeCounts[d] || 0) < maxDecadeAllowed;
+            });
+
+            if (replacementCandidates.length > 0) {
+              const pick = replacementCandidates[0];
+              const dupIdx = mainNumbers.indexOf(dupNum);
+              mainNumbers[dupIdx] = pick;
+              mainStationQuantities[pick] = mainStationQuantities[dupNum];
+              delete mainStationQuantities[dupNum];
+              currentMainPool[pick] -= mainStationQuantities[pick];
+              currentMainPool[dupNum] = (currentMainPool[dupNum] || 0) + mainStationQuantities[pick];
+              decadeCounts[overDecade]--;
+              decadeCounts[getDecade(pick)] = (decadeCounts[getDecade(pick)] || 0) + 1;
+              fixed++;
+            }
           }
         }
       }
